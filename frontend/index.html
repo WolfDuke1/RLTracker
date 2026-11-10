@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RL Modern Tracker</title>
+<style>
+  :root, [data-theme="dark"] {
+    --bg: #000000; --surface: #0a0a0a; --surface-2: #131313; --surface-3: #1a1a1a;
+    --border: #1f1f1f; --text: #f5f5f5; --text-muted: #8a8a8a; --accent: #facc15; 
+    --accent-fg: #000000; --green: #22c55e; --red: #ef4444; --yellow: #facc15; --purple: #a855f7;
+    --radius: 14px; --sidebar-w: 240px;
+  }
+  [data-theme="light"] {
+    --bg: #ffffff; --surface: #ffffff; --surface-2: #f1f5f9; --surface-3: #e8eef5;
+    --border: #e2e8f0; --text: #0f172a; --text-muted: #64748b; --accent: #4c8dff; 
+    --accent-fg: #ffffff; --green: #16a34a; --red: #dc2626; --yellow: #eab308; --purple: #7c3aed;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--text); overflow-x: hidden; }
+  
+  /* Full-Page Background Overlay (Only on Home) */
+  .app.is-home::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url('https://cdn2.unrealengine.com/rocket-4-1280x720-1c9bfd3219c5.jpg?resize=1&w=1280&h=720&quality=medium');
+    background-size: cover;
+    background-position: center;
+    z-index: -1;
+    pointer-events: none;
+    filter: grayscale(100%) brightness(0.3) contrast(1.2); 
+  }
+  [data-theme="light"] .app.is-home::before {
+    filter: none;
+    opacity: 0.6;
+  }
+
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; }
+  .app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); height: 100vh; overflow: hidden; position: relative; }
+  
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { position: fixed; bottom: 0; left: 0; right: 0; height: 64px; flex-direction: row; z-index: 100; border-top: 1px solid var(--border); padding: 0; background: var(--surface); }
+    .sidebar .brand, .sidebar .sidebar-footer { display: none; }
+    .sidebar nav { flex-direction: row; overflow-x: auto; flex: 1; }
+    .sidebar nav a { padding: 20px; justify-content: center; flex: 1; }
+    .sidebar nav a span { display: none; }
+    main { padding-bottom: 64px; height: calc(100vh - 64px); }
+  }
+
+  .sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 24px 16px; display: flex; flex-direction: column; gap: 24px; z-index: 10; }
+  .brand { font-size: 1.3rem; font-weight: 800; color: var(--text); padding: 0 8px; position: relative; display: inline-block; }
+  .brand span { color: var(--accent); }
+  .brand::after { content: ''; position: absolute; left: 8px; bottom: -4px; width: calc(100% - 16px); height: 3px; background: linear-gradient(90deg, var(--accent), var(--text)); border-radius: 2px; }
+  
+  .sidebar nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .sidebar nav a { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px; font-size: 0.9rem; font-weight: 500; color: var(--text-muted); transition: 0.15s; }
+  .sidebar nav a:hover { background: var(--surface-2); color: var(--text); }
+  .sidebar nav a.active { background: var(--accent); color: var(--accent-fg); font-weight: 700; }
+  .sidebar nav a svg { width: 18px; height: 18px; }
+  
+  main { display: flex; flex-direction: column; height: 100%; overflow: hidden; position: relative; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 16px; flex-wrap: wrap; flex-shrink: 0; z-index: 10; }
+  .search { display: flex; gap: 8px; flex: 1; max-width: 500px; min-width: 280px; }
+  input, select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 10px 14px; border-radius: 10px; font-size: 0.85rem; outline: none; }
+  input:focus, select:focus { border-color: var(--accent); }
+  .player-chip { display: flex; align-items: center; gap: 10px; background: var(--surface-2); padding: 8px 16px; border-radius: 999px; border: 1px solid var(--border); font-size: 0.85rem; }
+  .player-chip .avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--purple)); }
+  .active-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 4px; }
+  
+  .btn { background: var(--accent); color: var(--accent-fg); padding: 10px 18px; border-radius: 10px; font-size: 0.85rem; font-weight: 700; transition: 0.15s; white-space: nowrap; }
+  .btn:hover { opacity: 0.8; }
+  .btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
+  .btn.active { background: var(--accent); color: var(--accent-fg); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  
+  .view { padding: 24px; flex: 1; overflow-y: auto; overflow-x: hidden; z-index: 1; }
+  .view.no-scroll { overflow: hidden; display: flex; flex-direction: column; }
+  @media (max-width: 600px) { .view { padding: 16px; } }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; min-width: 0; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+  .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.2px; color: var(--text-muted); margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .card h2 a { color: var(--accent); text-transform: none; letter-spacing: 0; font-size: 0.8rem; }
+  
+  .stat-big { font-size: 1.4rem; font-weight: 800; line-height: 1.1; }
+  .stat-label { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 4px; }
+
+  /* HOME */
+  .home-hero { 
+    position: relative; border: 1px solid var(--border); border-radius: var(--radius); 
+    padding: 60px 32px; margin-bottom: 24px; text-align: center; overflow: hidden; 
+    background: rgba(10, 10, 10, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); 
+  }
+  [data-theme="light"] .home-hero {
+    background: rgba(255, 255, 255, 0.7);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1); 
+  }
+  
+  .home-hero-content { position: relative; z-index: 1; }
+  .home-title { font-size: 2.5rem; font-weight: 900; margin-bottom: 4px; text-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+  [data-theme="light"] .home-title { text-shadow: none; }
+  .home-title span { color: var(--accent); }
+  .home-subtitle { color: var(--text-muted); font-size: 1rem; margin-bottom: 24px; }
+  
+  .home-search-box { display: flex; gap: 8px; margin: 0 auto 16px; max-width: 600px; }
+  .home-search-box select { width: 140px; padding: 12px; background: var(--surface); }
+  .home-search-box input { flex: 1; padding: 12px 16px; background: var(--surface); }
+  .home-search-box button { padding: 0 24px; }
+  
+  .recent-players { max-width: 600px; margin: 0 auto; background: var(--surface); border-radius: 10px; border: 1px solid var(--border); text-align: left; }
+  .recent-players-header { padding: 10px 16px; font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+  .recent-player-item { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; cursor: pointer; font-size: 0.85rem; }
+  .recent-player-item:hover { background: var(--surface-2); }
+  .plat-badge { background: var(--surface-3); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; color: var(--text-muted); margin-right: 8px; }
+  
+  .home-stats-row { display: flex; gap: 16px; margin-bottom: 24px; justify-content: center; flex-wrap: wrap; }
+  .home-stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 20px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .home-stat-box .icon { color: var(--accent); }
+  .home-stat-box .val { font-weight: 800; font-size: 0.95rem; }
+  .home-stat-box .lbl { font-size: 0.7rem; color: var(--text-muted); }
+  
+  .home-content-area { display: flex; flex-direction: column; gap: 24px; }
+  .top-players-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+  .top-player-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: relative; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .top-player-card .rank-badge-bg { position: absolute; top: -10px; right: -10px; font-size: 4rem; font-weight: 900; color: var(--surface-2); z-index: 0; }
+  .top-player-card .content { position: relative; z-index: 1; }
+  .top-player-card .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--purple)); margin-bottom: 8px; }
+  .top-player-card .name { font-size: 0.95rem; font-weight: 700; }
+  .top-player-card .mmr { font-size: 1.4rem; font-weight: 900; color: var(--accent); }
+
+  /* DASHBOARD */
+  .dashboard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; align-items: start; }
+  @media (max-width: 1150px) { .dashboard-layout { grid-template-columns: 1fr; } }
+  
+  .peak-card { display: flex; flex-direction: column; gap: 20px; }
+  .peak-banner { background: linear-gradient(135deg, rgba(76, 141, 255, 0.15), transparent); border: 1px solid rgba(76, 141, 255, 0.2); border-radius: 12px; padding: 16px; display: flex; justify-content: space-between; }
+  .peak-banner-info { display: flex; align-items: center; gap: 16px; }
+  .peak-banner-icon { width: 48px; height: 48px; object-fit: contain; }
+  .peak-banner-text .val { font-size: 1.6rem; font-weight: 800; color: var(--yellow); line-height: 1; }
+  .peak-banner-text .sub { font-size: 0.75rem; color: var(--text-muted); }
+  .peak-banner-help { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--accent); color: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 800; cursor: help; position: relative; }
+  .peak-banner-help:hover::after { content: 'Highest MMR achieved across all playlists this season'; position: absolute; top: 30px; right: 0; background: var(--surface-3); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; font-size: 0.75rem; color: var(--text); z-index: 10; font-weight: 400; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+  
+  .peak-section-title { font-size: 0.85rem; font-weight: 800; color: var(--accent); text-transform: uppercase; margin-bottom: 8px; }
+  .peak-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .peak-col-header { font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .peak-col-header::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .peak-stat { display: flex; align-items: center; gap: 12px; }
+  .peak-stat img { width: 36px; height: 36px; }
+  .peak-stat-val { font-size: 1.2rem; font-weight: 800; }
+  .peak-stat-sub { font-size: 0.7rem; color: var(--text-muted); }
+
+  .rank-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .rank-grid-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; gap: 16px; align-items: center; position: relative; }
+  .rank-grid-card::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; background: var(--accent); }
+  .rank-grid-icon { width: 64px; height: 64px; }
+  .rank-grid-icon img { width: 100%; height: 100%; object-fit: contain; }
+  .rank-grid-content { flex: 1; }
+  .rank-grid-content .playlist-name { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); }
+  .rank-grid-content .mmr-val { font-size: 1.4rem; font-weight: 800; }
+  .rank-grid-content .div-val { font-size: 0.75rem; font-weight: 700; }
+  .rank-grid-content .rank-details { font-size: 0.8rem; }
+  .rank-grid-content .match-details { font-size: 0.75rem; display: flex; gap: 8px; color: var(--text-muted); }
+
+  /* TABLES */
+  .table-wrap { width: 100%; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; }
+  tr:hover td { background: var(--surface-2); }
+  .rank-cell { display: flex; align-items: center; gap: 10px; }
+  .rank-cell img { width: 24px; height: 24px; object-fit: contain; }
+  .mmr-cell { font-weight: 700; }
+  
+  /* LEADERBOARD PAGINATION */
+  .lb-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+  .lb-pagination { display: flex; gap: 8px; align-items: center; }
+  .lb-pagination button { padding: 6px 12px; font-size: 0.8rem; }
+  
+  /* SEMI-LIVE PAGE */
+  .live-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 16px; }
+  .live-badge { background: rgba(76, 141, 255, 0.15); color: var(--accent); padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(76, 141, 255, 0.7); } 70% { box-shadow: 0 0 0 6px rgba(76, 141, 255, 0); } 100% { box-shadow: 0 0 0 0 rgba(76, 141, 255, 0); } }
+  
+  .live-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .live-gamemode-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .live-gamemode-title { font-size: 0.9rem; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+  .live-gamemode-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .live-stat-box { background: var(--surface-2); border-radius: 8px; padding: 12px; text-align: center; }
+  .live-stat-box .val { font-size: 1.2rem; font-weight: 800; }
+  .live-stat-box .lbl { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; }
+  
+  .live-match-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border-radius: 8px; font-size: 0.85rem; margin-bottom: 8px; }
+  .live-match-item .wl { font-weight: 800; width: 40px; }
+  .live-match-item .wl.win { color: var(--green); }
+  .live-match-item .wl.loss { color: var(--red); }
+  .live-match-item .mmr-delta { font-weight: 700; width: 80px; text-align: right; }
+  .live-match-item .mmr-delta.up { color: var(--green); }
+  .live-match-item .mmr-delta.down { color: var(--red); }
+
+  /* PERFORMANCE */
+  .perf-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 20px; }
+  @media (max-width: 900px) { .perf-grid { grid-template-columns: 1fr; } }
+  .chart-container { position: relative; width: 100%; height: 300px; margin-top: 10px; }
+  .chart-svg { width: 100%; height: 100%; overflow: visible; }
+  .chart-tooltip { position: absolute; pointer-events: none; background: var(--surface-3); border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px; font-size: 0.75rem; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transform: translate(-50%, -100%); opacity: 0; transition: 0.1s; white-space: nowrap; z-index: 10; }
+  .chart-tooltip.visible { opacity: 1; }
+  .chart-tooltip .mmr-val { font-weight: 800; font-size: 0.9rem; margin-bottom: 2px; }
+
+  /* COMPARE */
+  .compare-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .compare-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; position: relative; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .compare-card .remove-btn { position: absolute; top: 16px; right: 16px; color: var(--red); cursor: pointer; font-size: 1.2rem; font-weight: 800; }
+  .compare-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .compare-header .avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, var(--purple), var(--accent)); }
+  .compare-header .info { flex: 1; }
+  .compare-header .name { font-weight: 800; font-size: 1rem; }
+  .compare-header .plat { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
+  
+  .mini-rank-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-bottom: 16px; }
+  .mini-rank-card { background: var(--surface-2); padding: 8px; border-radius: 8px; display: flex; align-items: center; gap: 8px; }
+  .mini-rank-card img { width: 32px; height: 32px; object-fit: contain; }
+  .mini-rank-card .mini-info { display: flex; flex-direction: column; }
+  .mini-rank-card .mini-name { font-size: 0.65rem; text-transform: uppercase; color: var(--text-muted); }
+  .mini-rank-card .mini-mmr { font-size: 0.85rem; font-weight: 800; }
+
+  .compare-live-toggle { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding: 12px; background: var(--surface-2); border-radius: 8px; }
+  .compare-live-list { display: flex; flex-direction: column; gap: 6px; }
+  .compare-live-item { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 8px; background: var(--surface-3); border-radius: 6px; }
+
+  /* DISTRIBUTION PAGE */
+  .dist-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 24px;
+    align-items: start;
+    position: relative;
+  }
+  @media (max-width: 1000px) {
+    .dist-layout { grid-template-columns: 1fr; }
+  }
+  
+  .dist-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  }
+  
+  .dist-table th { padding: 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .dist-table td { padding: 12px 16px; font-family: 'SF Mono', monospace; font-size: 0.85rem; }
+  
+  .highlighted-cell {
+    background-color: rgba(250, 204, 21, 0.15) !important;
+    color: var(--accent) !important;
+    font-weight: 800;
+    border-left: 2px solid var(--accent);
+    border-right: 2px solid var(--accent);
+  }
+  [data-theme="light"] .highlighted-cell {
+    background-color: rgba(76, 141, 255, 0.15) !important;
+  }
+
+  .floating-rank-card {
+    position: sticky;
+    top: 90px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .spinner { width: 24px; height: 24px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 40px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar">
+    <div class="brand">RL <span>Modern</span></div>
+    <nav id="nav">
+      <a href="#/home" data-route="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>
+      <a href="#/dashboard" data-route="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
+      <a href="#/live" data-route="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>Semi-Live</span></a>
+      <a href="#/performance" data-route="performance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Performance</span></a>
+      <a href="#/distribution" data-route="distribution"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5 2 7L12 16l-6.5 4.5 2-7L2 9h7z"/></svg><span>Distribution</span></a>
+      <a href="#/compare" data-route="compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Compare</span></a>
+      <a href="#/leaderboard" data-route="leaderboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span>Leaderboard</span></a>
+    </nav>
+    <div class="sidebar-footer"><button class="btn secondary" id="themeToggle" style="width:100%">🌙 Theme</button></div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <form class="search" id="searchForm">
+        <select id="platformInput" required><option value="" disabled selected>Platform</option><option value="epic">Epic Games</option><option value="steam">Steam</option><option value="psn">PlayStation</option><option value="xbl">Xbox</option><option value="switch">Nintendo</option></select>
+        <input type="text" id="playerInput" placeholder="Enter player name or ID" />
+        <button type="submit" class="btn">Track</button>
+      </form>
+      <div class="player-chip">
+        <div class="avatar"></div>
+        <div><div id="chipName" style="font-weight:600">No player</div><small style="color:var(--text-muted);font-size:0.7rem;text-transform:uppercase"><span class="active-dot"></span>Active Tracker</small></div>
+      </div>
+    </header>
+    <div id="view" class="view"></div>
+  </main>
+</div>
+
+<script>
+const DEFAULT_CONFIG = { player: { platform: '', id: '', name: '' }, theme: 'dark', demoMode: true, season: '12', rankView: 'list' };
+const loadConfig = () => { try { return { ...DEFAULT_CONFIG, ...JSON.parse(localStorage.getItem('rlConfig') || '{}') }; } catch { return { ...DEFAULT_CONFIG }; } };
+const saveConfig = (cfg) => localStorage.setItem('rlConfig', JSON.stringify(cfg));
+let config = loadConfig();
+
+const getRecentPlayers = () => { try { return JSON.parse(localStorage.getItem('rlRecentPlayers') || '[]'); } catch { return []; } };
+const addRecentPlayer = (name, platform) => {
+  if (!name || !platform) return;
+  let recent = getRecentPlayers().filter(p => !(p.name === name && p.platform === platform));
+  recent.unshift({ name, platform });
+  localStorage.setItem('rlRecentPlayers', JSON.stringify(recent.slice(0, 5)));
+};
+
+/* ── DYNAMIC MMR THRESHOLDS ── */
+const FALLBACK_TIERS = [
+  { name: 'Bronze I',   mmr: [0, 100, 130, 150] },
+  { name: 'Bronze II',  mmr: [175, 185, 195, 205] },
+  { name: 'Bronze III', mmr: [215, 235, 245, 255] },
+  { name: 'Silver I',   mmr: [256, 270, 280, 290] },
+  { name: 'Silver II',  mmr: [295, 305, 315, 325] },
+  { name: 'Silver III', mmr: [335, 345, 355, 365] },
+  { name: 'Gold I',     mmr: [376, 395, 415, 425] },
+  { name: 'Gold II',    mmr: [435, 450, 460, 470] },
+  { name: 'Gold III',   mmr: [495, 505, 515, 525] },
+  { name: 'Platinum I', mmr: [556, 575, 595, 615] },
+  { name: 'Platinum II',mmr: [635, 650, 665, 680] },
+  { name: 'Platinum III',mmr:[715, 730, 745, 760] },
+  { name: 'Diamond I',  mmr: [796, 825, 855, 885] },
+  { name: 'Diamond II', mmr: [895, 915, 935, 955] },
+  { name: 'Diamond III',mmr: [995, 1015, 1035, 1055] },
+  { name: 'Champion I', mmr: [1096, 1125, 1155, 1185] },
+  { name: 'Champion II',mmr: [1195, 1215, 1235, 1255] },
+  { name: 'Champion III',mmr:[1295, 1315, 1335, 1355] },
+  { name: 'Grand Champ I',mmr:[1396, 1425, 1455, 1485] },
+  { name: 'Grand Champ II',mmr:[1535, 1565, 1595, 1625] },
+  { name: 'Grand Champ III',mmr:[1675, 1705, 1735, 1765] },
+  { name: 'Supersonic Legend', mmr: [1900, 9999, 9999, 9999] }
+];
+
+let RANK_TIERS = FALLBACK_TIERS;
+
+/* ── RANK HELPERS ── */
+const RANK_NAMES = ['Unranked', 'Bronze', 'Bronze', 'Bronze', 'Silver', 'Silver', 'Silver', 'Gold', 'Gold', 'Gold', 'Platinum', 'Platinum', 'Platinum', 'Diamond', 'Diamond', 'Diamond', 'Champion', 'Champion', 'Champion', 'Grand Champion', 'Grand Champion', 'Grand Champion', 'Supersonic Legend'];
+const RANK_COLORS_ARRAY = ['#7a8699', '#b06a3f', '#b06a3f', '#b06a3f', '#a8b2c1', '#a8b2c1', '#a8b2c1', '#f1c40f', '#f1c40f', '#f1c40f', '#4fd1c5', '#4fd1c5', '#4fd1c5', '#4c8dff', '#4c8dff', '#4c8dff', '#a855f7', '#a855f7', '#a855f7', '#ef4444', '#ef4444', '#ef4444', '#f97316'];
+const DIVS = ['', 'I', 'II', 'III'];
+const RANK_COLORS = {
+  'Bronze': '#b06a3f', 'Silver': '#a8b2c1', 'Gold': '#f1c40f', 
+  'Platinum': '#4fd1c5', 'Diamond': '#4c8dff', 'Champion': '#a855f7', 
+  'Grand Champ': '#ef4444', 'Supersonic Legend': '#f97316', 'Unranked': '#7a8699'
+};
+const RANK_ICON_MAP = {
+  'Bronze I': 1, 'Bronze II': 2, 'Bronze III': 3,
+  'Silver I': 4, 'Silver II': 5, 'Silver III': 6,
+  'Gold I': 7, 'Gold II': 8, 'Gold III': 9,
+  'Platinum I': 10, 'Platinum II': 11, 'Platinum III': 12,
+  'Diamond I': 13, 'Diamond II': 14, 'Diamond III': 15,
+  'Champion I': 16, 'Champion II': 17, 'Champion III': 18,
+  'Grand Champ I': 19, 'Grand Champ II': 20, 'Grand Champ III': 21,
+  'Supersonic Legend': 22
+};
+
+const getRankDetails = (tierIndex) => {
+  const t = tierIndex || 0;
+  const div = t > 0 && t < 22 ? DIVS[((t - 1) % 3) + 1] : '';
+  return { name: RANK_NAMES[t] || 'Unranked', color: RANK_COLORS_ARRAY[t] || '#7a8699', fullName: `${RANK_NAMES[t] || 'Unranked'} ${div}`.trim() };
+};
+
+function calculateRank(mmr, playlist = '11') {
+  let offset = 0;
+  if (playlist === '10') offset = -100;
+  if (playlist === '13') offset = 0;
+  const adjustedMMR = mmr - offset;
+
+  for (let i = RANK_TIERS.length - 1; i >= 0; i--) {
+    const tier = RANK_TIERS[i];
+    if (adjustedMMR >= tier.mmr[0]) {
+      if (tier.name === 'Supersonic Legend') {
+        return { rankName: 'Supersonic Legend', division: 'I', fullName: 'Supersonic Legend', color: RANK_COLORS['Supersonic Legend'], iconId: 22, progress: 0, nextThreshold: 9999 };
+      }
+      let division = 'I';
+      let divIndex = 0;
+      for (let d = 3; d >= 0; d--) {
+        if (tier.mmr[d] !== -1 && adjustedMMR >= tier.mmr[d]) {
+          division = ['I', 'II', 'III', 'IV'][d];
+          divIndex = d;
+          break;
+        }
+      }
+      const nextThreshold = (divIndex < 3 && tier.mmr[divIndex + 1] !== -1) ? tier.mmr[divIndex + 1] : (RANK_TIERS[i + 1]?.mmr[0] || tier.mmr[3] + 50);
+      const prevThreshold = tier.mmr[divIndex];
+      const progress = Math.min(100, Math.max(0, ((adjustedMMR - prevThreshold) / (nextThreshold - prevThreshold)) * 100));
+      
+      const baseRank = tier.name.split(' ').slice(0, -1).join(' ');
+      return { 
+        rankName: tier.name, 
+        division: division, 
+        fullName: `${tier.name} Division ${division}`, 
+        color: RANK_COLORS[baseRank] || '#fff', 
+        iconId: RANK_ICON_MAP[tier.name] || 0,
+        progress: progress,
+        nextThreshold: nextThreshold
+      };
+    }
+  }
+  return { rankName: 'Unranked', division: '', fullName: 'Unranked', color: RANK_COLORS['Unranked'], iconId: 0, progress: 0, nextThreshold: 100 };
+}
+
+const getPercentile = (mmr) => {
+  const mean = 600;
+  const stdDev = 250;
+  const zScore = (mmr - mean) / stdDev;
+  const percentile = 1 / (1 + Math.exp(-1.702 * zScore));
+  const topPercent = (1 - percentile) * 100;
+  if (topPercent <= 0.1) return 'Top 0.1%';
+  if (topPercent >= 99) return 'Bottom 1%';
+  return `Top ${topPercent.toFixed(1)}%`;
+};
+
+const rankIconUrl = (tierIndex) => {
+  if (tierIndex >= 19) {
+    return `https://trackercdn.com/cdn/tracker.gg/rocket-league/ranks/s15rank${tierIndex}.png`;
+  } else {
+    return `https://trackercdn.com/cdn/tracker.gg/rocket-league/ranks/s4-${tierIndex}.png`;
+  }
+};
+
+const PLAYLISTS = { 10: { name: 'Ranked Duel 1v1', short: '1v1' }, 11: { name: 'Ranked Doubles 2v2', short: '2v2' }, 13: { name: 'Ranked Standard 3v3', short: '3v3' }, 0: { name: 'Casual', short: 'Casual' }, 27: { name: 'Dropshot', short: 'Dropshot' }, 28: { name: 'Hoops', short: 'Hoops' }, 29: { name: 'Rumble', short: 'Rumble' }, 30: { name: 'Snowday', short: 'Snowday' }, 34: { name: 'Heatseeker', short: 'Heatseeker' }, 35: { name: 'Tournament Matches', short: 'Tournament' } };
+
+const demoRanks = (season, playerName = 'You') => {
+  const hash = playerName.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+  const mo = (12 - parseInt(season, 10)) * 50 + (hash % 100);
+  return [
+    { playlist: '0',  mmr: 1046 - mo, tier: 11, division: 2, win_streak: 1, matches_played: 89,  peak_tier: 12, peak_mmr: 1060 - mo, win_rate: 50 },
+    { playlist: '10', mmr: 1085 - mo, tier: 12, division: 3, win_streak: 2, matches_played: 147, peak_tier: 13, peak_mmr: 1100 - mo, win_rate: 50 },
+    { playlist: '11', mmr: 1287 - mo, tier: 14, division: 2, win_streak: 4, matches_played: 612, peak_tier: 15, peak_mmr: 1310 - mo, win_rate: 52 },
+    { playlist: '13', mmr: 1175 - mo, tier: 13, division: 1, win_streak: 0, matches_played: 203, peak_tier: 13, peak_mmr: 1175 - mo, win_rate: 51 },
+    { playlist: '27', mmr: 778 - mo,  tier: 9,  division: 3, win_streak: 0, matches_played: 1,   peak_tier: 9,  peak_mmr: 778 - mo,  win_rate: 50 },
+    { playlist: '28', mmr: 969 - mo,  tier: 11, division: 2, win_streak: 4, matches_played: 5,   peak_tier: 11, peak_mmr: 969 - mo,  win_rate: 55 },
+    { playlist: '29', mmr: 756 - mo,  tier: 6,  division: 3, win_streak: 0, matches_played: 1,   peak_tier: 6,  peak_mmr: 756 - mo,  win_rate: 40 },
+    { playlist: '30', mmr: 921 - mo,  tier: 15, division: 3, win_streak: 0, matches_played: 2,   peak_tier: 15, peak_mmr: 921 - mo,  win_rate: 50 },
+    { playlist: '34', mmr: 597 - mo,  tier: 5,  division: 2, win_streak: 0, matches_played: 0,   peak_tier: 5,  peak_mmr: 597 - mo,  win_rate: 0 },
+    { playlist: '35', mmr: 1393 - mo, tier: 15, division: 3, win_streak: 0, matches_played: 0,   peak_tier: 15, peak_mmr: 1393 - mo, win_rate: 0 },
+  ];
+};
+
+const demoMatches = (playerName = 'You') => {
+  const out = [];
+  for (let i = 0; i < 20; i++) {
+    const win = (i * 7 + 3) % 5 !== 0, yourScore = win ? 3 + (i % 3) : 1 + (i % 2), oppScore = win ? 1 + (i % 2) : 3 + (i % 3);
+    out.push({ id: `demo-${i}`, date: new Date(Date.now() - i * 1000 * 60 * 47).toISOString(), playlist: [10, 11, 13, 0, 27, 28, 29, 30, 34, 35][i % 10], mmr_delta: win ? (7 + (i % 3)) : -(6 + (i % 3)), teams: [{ score: yourScore, players: [{ name: playerName }] }, { score: oppScore, players: [{ name: 'Opponent' }] }], players: [{ name: playerName, platform: 'epic', stats: { score: 200 + (i * 37) % 400, goals: yourScore, assists: i % 3, saves: i % 4, shots: yourScore + 1, mvps: i % 2 === 0 ? 1 : 0 } }] });
+  }
+  return out;
+};
+
+const demoMMRHistory = (playlist) => {
+  const pts = []; let mmr = playlist === 10 ? 1060 : playlist === 13 ? 1150 : playlist === 0 ? 1050 : 1250;
+  for (let i = 30; i >= 0; i--) { mmr += Math.round((Math.random() - 0.42) * 14); pts.push({ timestamp: Date.now() - i * 86400000, mmr }); }
+  return pts;
+};
+
+const demoLeaderboard = (limit = 100) => Array.from({ length: limit }, (_, i) => ({ name: `Player${i + 1}`, mmr: 2500 - i * 15, tier: 22, division: 1, wins: 500 - i * 4, losses: 200 - i * 2 }));
+
+const api = {
+  hasPlayer: () => !!config.player.name,
+  ranks: (season, player = config.player) => config.demoMode ? Promise.resolve(demoRanks(season, player.name)) : fetch(`/api/psynet/ranks/${player.platform}/${player.id}?season=${season}`).then(r => r.json()),
+  matches: (player = config.player) => config.demoMode ? Promise.resolve(demoMatches(player.name)) : fetch(`/api/ballchasing/player/${player.platform}/${player.id}/replays`).then(r => r.json()),
+  mmrHistory: (playlist) => config.demoMode ? Promise.resolve(demoMMRHistory(playlist)) : fetch(`/api/psynet/player/${config.player.platform}/${config.player.id}/mmr-history?playlist=${playlist}&days=30`).then(r => r.json()),
+  leaderboard: () => config.demoMode ? Promise.resolve(demoLeaderboard()) : fetch(`/api/ballchasing/leaderboard?limit=100`).then(r => r.json()),
+};
+
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtDate = (ts) => new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+const matchResult = (match) => {
+  const you = match.players.find(p => p.name === (config.player.name || 'You')) || match.players[0];
+  const teamIdx = match.teams.findIndex(t => t.players?.some(tp => tp.name === you.name));
+  const yourTeam = match.teams[teamIdx] || match.teams[0], oppTeam = match.teams[1 - teamIdx] || match.teams[1];
+  return { win: (yourTeam?.score ?? 0) > (oppTeam?.score ?? 0), yourScore: yourTeam?.score ?? 0, oppScore: oppTeam?.score ?? 0 };
+};
+
+function renderHome(root) {
+  const recent = getRecentPlayers();
+  const top = [{ name: 'mawkzy', playlist: 'Solos', mmr: 1762 }, { name: 'zenrl', playlist: 'Doubles', mmr: 2658 }, { name: 'GGM1 JUSTIN.', playlist: 'Trios', mmr: 2070 }];
+  root.innerHTML = `
+    <div class="home-hero">
+      <div class="home-hero-content">
+        <h1 class="home-title">ROCKET LEAGUE <span>STATS</span></h1>
+        <p class="home-subtitle">Check Detailed Rocket League Stats and Leaderboards</p>
+        <form class="home-search-box" id="homeSearchForm">
+          <select id="homePlatformInput" required><option value="" disabled selected>Platform</option><option value="epic">Epic Games</option><option value="steam">Steam</option><option value="psn">PlayStation</option><option value="xbl">Xbox</option><option value="switch">Nintendo</option></select>
+          <input type="text" id="homePlayerInput" placeholder="Enter player name or account ID" required />
+          <button type="submit" class="btn">Search</button>
+        </form>
+        ${recent.length > 0 ? `<div class="recent-players"><div class="recent-players-header"><span>Recent Players</span><span style="color:var(--accent);cursor:pointer" onclick="localStorage.removeItem('rlRecentPlayers');renderHome(document.getElementById('view'))">Clear</span></div>${recent.map(p => `<div class="recent-player-item" onclick="handleSearch('${escapeHtml(p.name)}','${p.platform}')"><div><span class="plat-badge">${p.platform.toUpperCase()}</span><strong>${escapeHtml(p.name)}</strong></div><span>›</span></div>`).join('')}</div>` : ''}
+      </div>
+    </div>
+    <div class="home-stats-row">
+      <div class="home-stat-box"><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg><div><div class="val">29d 3h</div><div class="lbl">Season Ends</div></div></div>
+      <div class="home-stat-box"><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><div><div class="val">149,930</div><div class="lbl">Players Online</div></div></div>
+    </div>
+    <div class="home-content-area">
+      <div><h2 style="font-size:0.9rem;font-weight:800;margin-bottom:12px">Top Players</h2><div class="top-players-grid">${top.map((p, i) => `<div class="top-player-card"><div class="rank-badge-bg">#${i + 1}</div><div class="content"><div class="avatar"></div><div class="name">${p.name}</div><div class="playlist" style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">${p.playlist}</div><div class="mmr">${p.mmr}</div></div></div>`).join('')}</div></div>
+      <div class="grid cols-3" style="display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+        <div class="card" style="background:linear-gradient(135deg,var(--surface-2),var(--surface))"><h2 style="margin-bottom:8px">Leaderboard</h2><p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">See where you stand against the best players in the world.</p><button class="btn secondary" style="width:100%" onclick="location.hash='#/leaderboard'">View Leaderboard</button></div>
+        <div class="card" style="background:linear-gradient(135deg,var(--surface-2),var(--surface))"><h2 style="margin-bottom:8px">Semi-Live</h2><p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">View live MMR changes and detailed match stats as they happen.</p><button class="btn secondary" style="width:100%" onclick="location.hash='#/live'">View Live</button></div>
+        <div class="card" style="background:linear-gradient(135deg,var(--surface-2),var(--surface))"><h2 style="margin-bottom:8px">Distribution</h2><p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:12px">Find out the percentage of tracked players by tier.</p><button class="btn secondary" style="width:100%" onclick="location.hash='#/distribution'">View Distribution</button></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('homeSearchForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const p = document.getElementById('homePlatformInput').value, n = document.getElementById('homePlayerInput').value.trim();
+    if (p && n) handleSearch(n, p);
+  });
+}
+
+async function renderDashboard(root) {
+  if (!api.hasPlayer()) { root.innerHTML = `<div class="card" style="max-width:600px;margin:60px auto"><div class="empty"><h2>Welcome</h2><p style="margin-bottom:20px">Search for a player to get started.</p><button class="btn" onclick="location.hash='#/home'">Go to Home</button></div></div>`; return; }
+  root.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const [ranks, matches] = await Promise.all([api.ranks(config.season).catch(() => []), api.matches().catch(() => [])]);
+    const recent = matches.slice(0, 5), wins = recent.filter(m => matchResult(m).win).length, losses = recent.filter(m => !matchResult(m).win).length;
+    const sorted = [...ranks].sort((a, b) => parseInt(a.playlist) - parseInt(b.playlist));
+    
+    let life = { matches: matches.length, wins: 0, mvps: 0, goals: 0, assists: 0, saves: 0, shots: 0 };
+    matches.forEach(m => { const r = matchResult(m); if (r.win) life.wins++; const you = m.players.find(p => p.name === (config.player.name || 'You')) || m.players[0]; if (you) { life.mvps += you.stats.mvps || 0; life.goals += you.stats.goals; life.assists += you.stats.assists; life.saves += you.stats.saves; life.shots += you.stats.shots; } });
+    
+    const duels = ranks.find(r => r.playlist === '10') || { mmr: 0, tier: 0, peak_mmr: 0, peak_tier: 0 }, dbl = ranks.find(r => r.playlist === '11') || { mmr: 0, tier: 0, peak_mmr: 0, peak_tier: 0 }, std = ranks.find(r => r.playlist === '13') || { mmr: 0, tier: 0, peak_mmr: 0, peak_tier: 0 };
+    let peak = { mmr: 0, tier: 0, playlist: '' };
+    ranks.forEach(r => { if ((r.peak_mmr || 0) > peak.mmr) peak = { mmr: r.peak_mmr, tier: r.peak_tier, playlist: PLAYLISTS[r.playlist]?.name }; });
+
+    const toggle = `<div style="display:flex;gap:4px"><button class="btn secondary ${config.rankView === 'list' ? 'active' : ''}" style="padding:4px 10px;font-size:0.75rem" onclick="setRankView('list')">List</button><button class="btn secondary ${config.rankView === 'grid' ? 'active' : ''}" style="padding:4px 10px;font-size:0.75rem" onclick="setRankView('grid')">Grid</button></div>`;
+
+    root.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:24px;flex-wrap:wrap;gap:16px">
+        <h1 style="font-size:1.5rem;font-weight:800;margin:0">Overview — ${escapeHtml(config.player.name)}</h1>
+        <div style="display:flex;align-items:center;gap:12px"><label style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;font-weight:600">Season</label>
+          <select id="seasonSelect" style="padding:8px 14px;border-radius:10px;font-weight:600;font-size:0.85rem"><option value="12" ${config.season === '12' ? 'selected' : ''}>S12</option><option value="11" ${config.season === '11' ? 'selected' : ''}>S11</option><option value="10" ${config.season === '10' ? 'selected' : ''}>S10</option></select>
+        </div>
+      </div>
+      <div class="dashboard-layout">
+        <div class="card" style="margin-bottom:20px">
+          <h2>Playlist Overview ${toggle}</h2>
+          ${config.rankView === 'grid' ? `<div class="rank-grid">${sorted.map(r => { const rk = getRankDetails(r.tier); return `<div class="rank-grid-card"><div class="rank-grid-icon"><img src="${rankIconUrl(r.tier)}" /></div><div class="rank-grid-content"><div class="playlist-name">${PLAYLISTS[r.playlist]?.name}</div><div class="mmr-row"><span class="mmr-val">${r.mmr}</span><span class="div-val" style="color:var(--green)">Div ${r.division || 0} &uarr;</span></div><div class="rank-details"><span style="color:${rk.color};font-weight:600">${rk.fullName}</span> <span style="color:var(--text-muted)">· ${getPercentile(r.mmr)}</span></div><div class="match-details"><span>${r.matches_played || 0} Games</span><span>· ${r.win_streak > 0 ? `W${r.win_streak}` : (r.win_streak < 0 ? `L${Math.abs(r.win_streak)}` : '—')}</span></div></div></div>`; }).join('')}</div>` : `
+            <div class="table-wrap"><table><thead><tr><th>Playlist</th><th>Rank</th><th>Peak</th><th>MMR</th><th>Matches</th><th>Win Rate</th><th>Streak</th></tr></thead><tbody>
+              ${sorted.map(r => { const rk = getRankDetails(r.tier); return `<tr><td style="font-weight:600">${PLAYLISTS[r.playlist]?.name}</td><td><div class="rank-cell"><img src="${rankIconUrl(r.tier)}" /><div style="display:flex;flex-direction:column;gap:2px"><div style="font-weight:600;color:${rk.color};font-size:0.85rem">${rk.name}</div><div style="font-size:0.7rem;color:var(--text-muted)">Div ${DIVS[((r.tier - 1) % 3) + 1]}</div><div style="font-size:0.65rem;color:var(--text-muted)">${getPercentile(r.mmr)}</div></div></div></td><td style="color:var(--text-muted)">${r.peak_mmr || r.mmr}</td><td style="font-weight:700">${r.mmr}</td><td>${r.matches_played}</td><td style="font-weight:600">${r.win_rate}%</td><td style="color:var(--text-muted)">${r.win_streak > 0 ? `W${r.win_streak}` : (r.win_streak < 0 ? `L${Math.abs(r.win_streak)}` : '—')}</td></tr>`; }).join('')}
+            </tbody></table></div>
+          `}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div class="card" style="display:flex;flex-direction:column;gap:16px">
+            <div class="peak-banner"><div class="peak-banner-info"><img src="${rankIconUrl(peak.tier)}" class="peak-banner-icon" /><div class="peak-banner-text"><h3 style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase">Peak Rating</h3><div class="val">${peak.mmr.toLocaleString()}</div><div class="sub">${peak.playlist} · Season ${config.season}</div></div></div><div class="peak-banner-help">?</div></div>
+            ${[['Ranked Duel 1v1', duels], ['Ranked Doubles 2v2', dbl], ['Ranked Standard 3v3', std]].map(([title, data]) => `
+              <div><div class="peak-section-title">${title}</div><div class="peak-split"><div><div class="peak-col-header">Current</div><div class="peak-stat"><img src="${rankIconUrl(data.tier)}" /><div><div class="peak-stat-val">${data.mmr.toLocaleString()}</div><div class="peak-stat-sub" style="color:${getRankDetails(data.tier).color}">${getPercentile(data.mmr)}</div></div></div></div><div><div class="peak-col-header">Best</div><div class="peak-stat"><img src="${rankIconUrl(data.peak_tier || data.tier)}" /><div><div class="peak-stat-val">${(data.peak_mmr || data.mmr).toLocaleString()}</div><div class="peak-stat-sub">Season ${config.season}</div></div></div></div></div></div>
+            `).join('')}
+          </div>
+          <div class="card"><h2>Recent Form <a href="#/dashboard">View all →</a></h2><div style="display:flex;gap:20px;margin-bottom:16px"><div><div class="stat-big" style="color:var(--green)">${wins}</div><div class="stat-label">Wins</div></div><div><div class="stat-big" style="color:var(--red)">${losses}</div><div class="stat-label">Losses</div></div><div><div class="stat-big">${wins + losses ? Math.round(wins / (wins + losses) * 100) : 0}%</div><div class="stat-label">Win Rate</div></div></div>${recent.map(m => { const r = matchResult(m); return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--surface-2);border-radius:8px;margin-bottom:6px;font-size:0.85rem"><span style="font-weight:700;color:${r.win ? 'var(--green)' : 'var(--red)'}">${r.win ? 'WIN' : 'LOSS'}</span><span style="color:var(--text-muted)">${PLAYLISTS[m.playlist]?.short}</span><span style="font-weight:700">${r.yourScore} - ${r.oppScore}</span><span style="color:var(--text-muted);font-size:0.75rem">${fmtDate(m.date)}</span></div>`; }).join('')}</div>
+          <div class="card"><h2>Lifetime Core Stats</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">${[['Matches', life.matches], ['Wins', life.wins], ['Win Rate', Math.round((life.wins / life.matches) * 100) + '%'], ['MVPs', life.mvps], ['Goals', life.goals], ['Assists', life.assists], ['Saves', life.saves], ['Shots', life.shots]].map(([l, v]) => `<div><div class="stat-big">${v}</div><div class="stat-label">${l}</div></div>`).join('')}</div></div>
+        </div>
+      </div>
+      <!-- MATCH HISTORY MOVED HERE -->
+      <div class="card" style="margin-top:20px">
+        <h2>Match History <div style="display:flex;gap:8px"><select id="fPl" style="padding:6px 12px;font-size:0.8rem"><option value="all">All playlists</option>${Object.entries(PLAYLISTS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join('')}</select><select id="fRes" style="padding:6px 12px;font-size:0.8rem"><option value="all">All results</option><option value="win">Wins</option><option value="loss">Losses</option></select></div></h2>
+        <div id="mList"></div>
+      </div>
+    `;
+    document.getElementById('seasonSelect').addEventListener('change', e => { config.season = e.target.value; saveConfig(config); renderDashboard(root); });
+    
+    // Initialize match history filters
+    const applyMatchFilters = () => {
+      const p = document.getElementById('fPl').value, r = document.getElementById('fRes').value;
+      const filt = matches.filter(m => { if (p !== 'all' && String(m.playlist) !== p) return false; const res = matchResult(m); if (r === 'win' && !res.win) return false; if (r === 'loss' && res.win) return false; return true; });
+      document.getElementById('mList').innerHTML = !filt.length ? `<div class="empty">No matches.</div>` : `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Playlist</th><th>Result</th><th>Score</th><th>Goals</th><th>Assists</th><th>Saves</th><th>Shots</th><th>MVP</th></tr></thead><tbody>${filt.map(m => { const res = matchResult(m), you = m.players.find(p => p.name === (config.player.name || 'You')) || m.players[0]; return `<tr><td style="color:var(--text-muted)">${fmtDate(m.date)}</td><td style="font-weight:600">${PLAYLISTS[m.playlist]?.name}</td><td style="font-weight:700;color:${res.win ? 'var(--green)' : 'var(--red)'}">${res.win ? 'WIN' : 'LOSS'}</td><td style="font-weight:700">${res.yourScore} - ${res.oppScore}</td><td>${you?.stats.goals || 0}</td><td>${you?.stats.assists || 0}</td><td>${you?.stats.saves || 0}</td><td>${you?.stats.shots || 0}</td><td style="color:var(--yellow);font-size:1.1rem">${you?.stats.mvps ? '★' : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+    };
+    document.getElementById('fPl').addEventListener('change', applyMatchFilters); 
+    document.getElementById('fRes').addEventListener('change', applyMatchFilters); 
+    applyMatchFilters();
+
+  } catch (err) { root.innerHTML = `<div class="card"><div class="empty">Error loading dashboard</div></div>`; }
+}
+
+async function renderLive(root) {
+  if (!api.hasPlayer()) { root.innerHTML = `<div class="card"><div class="empty">Search a player first.</div></div>`; return; }
+  let timer = 240, intId = null, isRender = false;
+  
+  const load = async () => {
+    if (isRender) return; isRender = true;
+    try {
+      const matches = await api.matches(); const recent = matches.slice(0, 10);
+      if (!recent.length) { root.innerHTML = `<div class="empty">No recent matches</div>`; isRender = false; return; }
+      const stats = {};
+      recent.forEach(m => {
+        const pl = m.playlist; if (!stats[pl]) stats[pl] = { wins: 0, losses: 0, mmr: 0, g: 0, a: 0, s: 0 };
+        const res = matchResult(m); if (res.win) stats[pl].wins++; else stats[pl].losses++;
+        stats[pl].mmr += m.mmr_delta || (res.win ? 8 : -7);
+        const you = m.players.find(p => p.name === (config.player.name || 'You')) || m.players[0];
+        if (you) { stats[pl].g += you.stats.goals; stats[pl].a += you.stats.assists; stats[pl].s += you.stats.saves; }
+      });
+      root.innerHTML = `
+        <div class="live-header"><div style="display:flex;align-items:center;gap:16px"><h1 style="font-size:1.5rem;font-weight:800;margin:0">Semi-Live Tracker</h1><div class="live-badge"><div class="live-dot"></div> Cloud Synced</div></div><div style="font-size:0.8rem;color:var(--text-muted)">Next cloud sync in <span id="liveTimer">${timer}</span>s</div></div>
+        <div class="live-grid">${Object.keys(stats).map(pl => { const s = stats[pl], r = s.wins + s.losses; return `<div class="live-gamemode-card"><div class="live-gamemode-title">${PLAYLISTS[pl]?.name || 'Unknown'}</div><div class="live-gamemode-stats"><div class="live-stat-box"><div class="val" style="color:${s.mmr >= 0 ? 'var(--green)' : 'var(--red)'}">${s.mmr > 0 ? '+' : ''}${s.mmr} MMR</div><div class="lbl">Net MMR</div></div><div class="live-stat-box"><div class="val">${s.wins} - ${s.losses}</div><div class="lbl">Record</div></div><div class="live-stat-box"><div class="val">${r ? Math.round((s.wins / r) * 100) : 0}%</div><div class="lbl">Win Rate</div></div><div class="live-stat-box"><div class="val">${s.g}/${s.a}/${s.s}</div><div class="lbl">G / A / Sv</div></div></div></div>`; }).join('')}</div>
+        <div class="card"><h2>Recent Matches <span style="font-size:0.7rem;color:var(--text-muted);text-transform:none;font-weight:400;">(Pulled from Ballchasing API)</span></h2>${recent.map(m => { const res = matchResult(m), d = m.mmr_delta || (res.win ? 8 : -7); return `<div class="live-match-item"><div class="wl ${res.win ? 'win' : 'loss'}">${res.win ? 'WIN' : 'LOSS'}</div><div style="font-weight:600;flex:1;margin-left:12px">${PLAYLISTS[m.playlist]?.name}</div><div style="color:var(--text-muted);width:60px;text-align:center">${res.yourScore} - ${res.oppScore}</div><div class="mmr-delta ${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d} MMR</div></div>`; }).join('')}</div>
+      `;
+    } catch { root.innerHTML = `<div class="card"><div class="empty">Error loading live data</div></div>`; } finally { isRender = false; }
+  };
+  
+  root.innerHTML = `<div class="spinner"></div>`; await load();
+  intId = setInterval(async () => { timer--; const el = document.getElementById('liveTimer'); if (el) el.textContent = timer; if (timer <= 0) { timer = 240; await load(); } }, 1000);
+  window._liveInt = intId;
+}
+
+async function renderPerformance(root) {
+  if (!api.hasPlayer()) { root.innerHTML = `<div class="card"><div class="empty">Search a player first.</div></div>`; return; }
+  root.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const matches = await api.matches(), decided = matches.map(m => matchResult(m)), wins = decided.filter(r => r.win).length, pct = decided.length ? (wins / decided.length) * 100 : 0;
+    const bestPl = Object.entries(PLAYLISTS).map(([id, p]) => {
+      const pMatches = matches.filter(m => String(m.playlist) === id);
+      if (!pMatches.length) return null;
+      const pWins = pMatches.filter(m => matchResult(m).win).length;
+      return { name: p.name, rate: Math.round((pWins / pMatches.length) * 100), count: pMatches.length };
+    }).filter(Boolean).sort((a, b) => b.rate - a.rate);
+
+    root.innerHTML = `
+      <h1 style="font-size:1.5rem;font-weight:800;margin-bottom:24px">Performance</h1>
+      <div class="perf-grid">
+        <div class="card">
+          <h2>MMR Trend <span id="lbl" style="color:var(--text-muted);text-transform:none">Last 30 days</span></h2>
+          <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap" id="tabs">${Object.entries(PLAYLISTS).map(([id, p]) => `<button class="btn secondary" data-pl="${id}" style="padding:6px 14px;font-size:0.8rem">${p.name}</button>`).join('')}</div>
+          <div id="chart"><div class="spinner"></div></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+            <h2 style="align-self:flex-start;margin-bottom:0">Win Rate</h2>
+            <svg width="120" height="120" viewBox="0 0 120 120" style="margin:16px 0"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--surface-2)" stroke-width="12"/><circle cx="60" cy="60" r="50" fill="none" stroke="${pct >= 50 ? 'var(--green)' : 'var(--red)'}" stroke-width="12" stroke-dasharray="${(pct / 100) * 314} 314" stroke-linecap="round" transform="rotate(-90 60 60)"/><text x="50%" y="50%" text-anchor="middle" dy="0.35em" fill="var(--text)" font-size="24" font-weight="800">${Math.round(pct)}%</text></svg>
+            <div style="font-weight:700;font-size:1.1rem">${wins}W - ${decided.length - wins}L</div>
+          </div>
+          <div class="card">
+            <h2>Best Playlist</h2>
+            ${bestPl.length ? `<div style="font-size:1.1rem;font-weight:800;color:var(--accent);margin-bottom:4px">${bestPl[0].name}</div><div style="font-size:0.85rem;color:var(--text-muted)">${bestPl[0].rate}% Win Rate (${bestPl[0].count} games)</div>` : `<div class="empty">No data</div>`}
+            <hr style="border:none;border-top:1px solid var(--border);margin:16px 0" />
+            <h2>Worst Playlist</h2>
+            ${bestPl.length > 1 ? `<div style="font-size:1.1rem;font-weight:800;color:var(--red);margin-bottom:4px">${bestPl[bestPl.length - 1].name}</div><div style="font-size:0.85rem;color:var(--text-muted)">${bestPl[bestPl.length - 1].rate}% Win Rate (${bestPl[bestPl.length - 1].count} games)</div>` : `<div class="empty">No data</div>`}
+          </div>
+        </div>
+      </div>
+    `;
+    const loadChart = async (pl) => {
+      const c = document.getElementById('chart'), lbl = document.getElementById('lbl'); lbl.textContent = `${PLAYLISTS[pl]?.name} · Last 30 days`; c.innerHTML = `<div class="spinner"></div>`;
+      try {
+        const hist = await api.mmrHistory(pl), pts = hist.map(h => ({ x: new Date(h.timestamp).getTime(), y: h.mmr })), delta = pts[pts.length - 1].y - pts[0].y, color = delta >= 0 ? 'var(--green)' : 'var(--red)';
+        const minY = Math.min(...pts.map(p => p.y)), maxY = Math.max(...pts.map(p => p.y)), range = maxY - minY || 1;
+        const svgPts = pts.map((p, i) => `${(i / (pts.length - 1)) * 100},${100 - ((p.y - minY) / range) * 80 - 10}`).join(' ');
+        c.innerHTML = `<div class="chart-container"><div style="position:absolute;left:0;top:0;bottom:0;width:40px;display:flex;flex-direction:column;justify-content:space-between;font-size:0.75rem;color:var(--text-muted)"><span>${Math.round(maxY)}</span><span>${Math.round((maxY + minY) / 2)}</span><span>${Math.round(minY)}</span></div><svg class="chart-svg" style="padding-left:40px" viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="0,100 ${svgPts} 100,100" fill="url(#grad)" opacity="0.2"/><polyline points="${svgPts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/><defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs></svg></div><div style="margin-top:12px;font-size:0.8rem;color:var(--text-muted);padding-left:40px"><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:6px"></span>${delta >= 0 ? '+' : ''}${delta} MMR over period</div>`;
+      } catch { c.innerHTML = `<div class="empty">Unavailable</div>`; }
+    };
+    document.querySelectorAll('#tabs button').forEach(btn => btn.addEventListener('click', () => loadChart(parseInt(btn.dataset.pl))));
+    loadChart(11);
+  } catch { root.innerHTML = `<div class="card"><div class="empty">Error loading performance</div></div>`; }
+}
+
+async function renderDistribution(root) {
+  if (!api.hasPlayer()) { root.innerHTML = `<div class="card"><div class="empty">Search a player first.</div></div>`; return; }
+  root.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const ranks = await api.ranks(config.season);
+    
+    root.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:24px; flex-wrap:wrap; gap:16px;">
+        <h1 style="font-size:1.5rem;font-weight:800;margin:0;">Distribution</h1>
+        <select id="distPlaylist" style="padding:8px 14px;border-radius:10px;font-weight:600;font-size:0.85rem">
+          ${Object.entries(PLAYLISTS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join('')}
+        </select>
+      </div>
+      
+      <div class="dist-layout">
+        <div class="dist-card">
+          <div class="table-wrap">
+            <table class="dist-table">
+              <thead>
+                <tr><th>Tier</th><th>Division I</th><th>Division II</th><th>Division III</th><th>Division IV</th></tr>
+              </thead>
+              <tbody id="distTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div id="floatingRankContainer"></div>
+      </div>
+    `;
+
+    const drawDistribution = (playlistId) => {
+      const plRanks = ranks.find(r => r.playlist === playlistId) || { mmr: 0 };
+      const playerMMR = plRanks.mmr;
+      const playerRank = calculateRank(playerMMR, playlistId);
+      
+      document.getElementById('floatingRankContainer').innerHTML = `
+        <div class="floating-rank-card">
+          <div>
+            <div style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); letter-spacing:1px; margin-bottom:8px;">Your Rank</div>
+            <div style="display:flex; align-items:center; gap:16px;">
+               <img src="${rankIconUrl(playerRank.iconId)}" style="width:56px;height:56px;object-fit:contain;" />
+               <div>
+                 <div style="font-size:1.6rem;font-weight:800;color:${playerRank.color};line-height:1.1;">${playerMMR}</div>
+                 <div style="font-size:0.8rem;color:var(--text-muted);">${playerRank.fullName}</div>
+               </div>
+            </div>
+          </div>
+          <div style="font-size:0.75rem; color:var(--text-muted); border-top: 1px solid var(--border); padding-top: 12px;">
+            ${getPercentile(playerMMR)} of all players
+          </div>
+        </div>
+      `;
+
+      let html = '';
+      const reversedTiers = [...RANK_TIERS].reverse();
+      
+      reversedTiers.forEach(tier => {
+        const baseName = tier.name.split(' ').slice(0, -1).join(' ');
+        const tierColor = RANK_COLORS[baseName] || '#fff';
+        const isRankRow = tier.name === playerRank.rankName;
+        
+        html += `<tr>`;
+        html += `<td>
+                   <div class="rank-cell">
+                     <img src="${rankIconUrl(RANK_ICON_MAP[tier.name] || 0)}" style="width:24px;height:24px;object-fit:contain" />
+                     <span style="color:${tierColor}; font-weight:600;">${tier.name}</span>
+                   </div>
+                 </td>`;
+        
+        tier.mmr.forEach((val, idx) => {
+          const divName = ['I', 'II', 'III', 'IV'][idx];
+          const isTargetCell = isRankRow && divName === playerRank.division;
+          
+          html += `<td class="${isTargetCell ? 'highlighted-cell' : ''}">${val > 9000 || val === -1 ? '-' : val}</td>`;
+        });
+        html += `</tr>`;
+      });
+      document.getElementById('distTableBody').innerHTML = html;
+    };
+
+    const initialPl = ranks.length ? ranks[0].playlist : '11';
+    document.getElementById('distPlaylist').value = initialPl;
+    document.getElementById('distPlaylist').addEventListener('change', e => drawDistribution(e.target.value));
+    drawDistribution(initialPl);
+    
+  } catch(err) {
+    root.innerHTML = `<div class="card"><div class="empty">Error loading distribution</div></div>`;
+  }
+}
+
+async function renderCompare(root) {
+  let comp = JSON.parse(localStorage.getItem('rlCompare') || '[]');
+  let liveMode = false;
+  let compareRanks = {};
+  let liveData = {};
+
+  const loadData = async () => {
+    for (const p of comp) {
+      compareRanks[p.name] = await api.ranks('12', p);
+      const matches = await api.matches(p);
+      liveData[p.name] = matches.slice(0, 5).map(m => ({ win: matchResult(m).win, score: `${matchResult(m).yourScore}-${matchResult(m).oppScore}`, playlist: PLAYLISTS[m.playlist]?.short, delta: m.mmr_delta || (matchResult(m).win ? 8 : -7) }));
+    }
+  };
+
+  const draw = async () => {
+    if (comp.length) await loadData();
+    const grid = document.getElementById('compGrid');
+    if (!grid) return;
+
+    grid.innerHTML = comp.map(p => `
+      <div class="compare-card">
+        <button class="remove-btn" onclick="removeComp('${escapeHtml(p.name)}')">×</button>
+        <div class="compare-header"><div class="avatar"></div><div class="info"><div class="name">${escapeHtml(p.name)}</div><div class="plat">${p.platform}</div></div></div>
+        <div class="mini-rank-grid">
+          ${(compareRanks[p.name] || []).map(r => { const rk = calculateRank(r.mmr, r.playlist); return `<div class="mini-rank-card"><img src="${rankIconUrl(rk.iconId)}" /><div class="mini-info"><div class="mini-name">${PLAYLISTS[r.playlist]?.short}</div><div class="mini-mmr" style="color:${rk.color}">${r.mmr}</div></div></div>`; }).join('')}
+        </div>
+        <div class="compare-live-list">${(liveData[p.name] || []).map(m => `<div class="compare-live-item"><span style="color:${m.win ? 'var(--green)' : 'var(--red)'};font-weight:700">${m.win ? 'W' : 'L'}</span><span style="color:var(--text-muted)">${m.playlist}</span><span>${m.score}</span><span style="color:${m.delta > 0 ? 'var(--green)' : 'var(--red)'}">${m.delta > 0 ? '+' : ''}${m.delta} MMR</span></div>`).join('')}</div>
+      </div>
+    `).join('');
+  };
+
+  root.innerHTML = `
+    <h1 style="font-size:1.5rem;font-weight:800;margin-bottom:24px">Compare Players</h1>
+    <div class="card" style="margin-bottom:24px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="compName" placeholder="Player Name" style="flex:1;min-width:200px" />
+      <select id="compPlat" style="width:140px"><option value="epic">Epic</option><option value="steam">Steam</option><option value="psn">PSN</option><option value="xbl">Xbox</option></select>
+      <button class="btn" id="addComp">Add Player</button>
+      <button class="btn secondary ${liveMode ? 'active' : ''}" id="toggleLive" style="margin-left:auto">🔴 Semi-Live Mode: ${liveMode ? 'ON' : 'OFF'}</button>
+    </div>
+    <div class="compare-grid" id="compGrid"></div>
+  `;
+
+  await draw();
+
+  document.getElementById('addComp').addEventListener('click', () => {
+    const n = document.getElementById('compName').value.trim(), p = document.getElementById('compPlat').value;
+    if (n && comp.length < 4 && !comp.some(c => c.name === n)) {
+      comp.push({ name: n, platform: p }); localStorage.setItem('rlCompare', JSON.stringify(comp));
+      draw();
+    }
+  });
+
+  document.getElementById('toggleLive').addEventListener('click', () => { 
+    liveMode = !liveMode; 
+    const btn = document.getElementById('toggleLive');
+    btn.className = `btn secondary ${liveMode ? 'active' : ''}`;
+    btn.textContent = `🔴 Semi-Live Mode: ${liveMode ? 'ON' : 'OFF'}`;
+    if (liveMode) {
+      if (window._compareInt) clearInterval(window._compareInt);
+      window._compareInt = setInterval(async () => {
+        if (location.hash !== '#/compare') { clearInterval(window._compareInt); return; }
+        await draw();
+      }, 240000); // 4 minutes
+    } else {
+      if (window._compareInt) { clearInterval(window._compareInt); window._compareInt = null; }
+    }
+  });
+  
+  window.removeComp = (name) => { comp = comp.filter(c => c.name !== name); localStorage.setItem('rlCompare', JSON.stringify(comp)); draw(); };
+}
+
+async function renderLeaderboard(root) {
+  root.innerHTML = `<h1 style="font-size:1.5rem;font-weight:800;margin-bottom:24px">Leaderboard</h1>
+    <div class="card">
+      <div class="lb-controls">
+        <div style="font-weight:600;font-size:0.9rem;">Top Players</div>
+        <div style="display:flex;gap:16px;align-items:center;">
+          <select id="lbLimit" style="padding:6px 12px;font-size:0.8rem">
+            <option value="10">10 entries</option>
+            <option value="25">25 entries</option>
+            <option value="50">50 entries</option>
+            <option value="100">100 entries</option>
+          </select>
+          <div class="lb-pagination">
+            <button class="btn secondary" id="lbPrev" disabled>Prev</button>
+            <span id="lbPageInfo" style="font-size:0.85rem; color:var(--text-muted); font-weight:600;">Page 1</span>
+            <button class="btn secondary" id="lbNext">Next</button>
+          </div>
+        </div>
+      </div>
+      <div id="lbTable"><div class="spinner"></div></div>
+    </div>`;
+
+  try {
+    const allRows = await api.leaderboard();
+    let page = 1, limit = 10;
+
+    const drawTable = () => {
+      const totalPages = Math.ceil(allRows.length / limit) || 1;
+      if (page > totalPages) page = totalPages;
+      const start = (page - 1) * limit;
+      const slice = allRows.slice(start, start + limit);
+      
+      document.getElementById('lbPageInfo').textContent = `Page ${page} of ${totalPages}`;
+      document.getElementById('lbPrev').disabled = page === 1;
+      document.getElementById('lbNext').disabled = page === totalPages;
+
+      document.getElementById('lbTable').innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Player</th><th>Rank</th><th>MMR</th><th>W/L</th></tr></thead>
+            <tbody>
+              ${slice.map((r, i) => { 
+                const rk = calculateRank(r.mmr, '11'); 
+                const globalIndex = start + i + 1;
+                return `<tr>
+                  <td style="color:var(--text-muted)">${globalIndex}</td>
+                  <td><strong>${escapeHtml(r.name)}</strong></td>
+                  <td><div class="rank-cell"><img src="${rankIconUrl(rk.iconId)}" /><span style="color:${rk.color};font-weight:600">${rk.fullName}</span></div></td>
+                  <td style="font-weight:700">${r.mmr}</td>
+                  <td style="color:var(--text-muted)">${r.wins} / ${r.losses}</td>
+                </tr>`; 
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    };
+
+    document.getElementById('lbLimit').addEventListener('change', e => { limit = parseInt(e.target.value); page = 1; drawTable(); });
+    document.getElementById('lbPrev').addEventListener('click', () => { if (page > 1) { page--; drawTable(); } });
+    document.getElementById('lbNext').addEventListener('click', () => { if (page < Math.ceil(allRows.length / limit)) { page++; drawTable(); } });
+    
+    drawTable();
+  } catch { document.getElementById('lbTable').innerHTML = `<div class="empty">Error loading leaderboard</div>`; }
+}
+
+function toast(m) { const d = document.createElement('div'); d.textContent = m; Object.assign(d.style, { position: 'fixed', bottom: '24px', right: '24px', background: 'var(--surface-2)', padding: '12px 18px', borderRadius: '10px', border: '1px solid var(--border)', zIndex: 999, transition: '0.3s', opacity: 0 }); document.body.appendChild(d); requestAnimationFrame(() => d.style.opacity = 1); setTimeout(() => { d.style.opacity = '0'; setTimeout(() => d.remove(), 300); }, 2200); }
+
+function handleSearch(name, platform) {
+  config.player = { platform, name, id: name }; saveConfig(config); addRecentPlayer(name, platform); updateChip(); toast(`Tracking ${name}`);
+  if (location.hash === '#/dashboard') renderDashboard(document.getElementById('view')); else location.hash = '#/dashboard';
+}
+const updateChip = () => document.getElementById('chipName').textContent = config.player.name || 'No player';
+const setRankView = (view) => { config.rankView = view; saveConfig(config); renderDashboard(document.getElementById('view')); };
+
+const routes = { home: renderHome, dashboard: renderDashboard, live: renderLive, performance: renderPerformance, distribution: renderDistribution, compare: renderCompare, leaderboard: renderLeaderboard };
+function router() {
+  if (window._liveInt) { clearInterval(window._liveInt); window._liveInt = null; }
+  if (window._compareInt) { clearInterval(window._compareInt); window._compareInt = null; }
+  
+  const h = location.hash.replace(/^#\/?/, '') || 'home';
+  const r = routes[h] ? h : 'home';
+  
+  const appEl = document.getElementById('app');
+  if (r === 'home') appEl.classList.add('is-home');
+  else appEl.classList.remove('is-home');
+
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === r));
+  document.getElementById('searchForm').style.display = r === 'home' ? 'none' : 'flex';
+  const v = document.getElementById('view'); v.innerHTML = ''; v.className = r === 'home' ? 'view no-scroll' : 'view'; routes[r](v);
+  window.scrollTo(0, 0);
+}
+
+document.getElementById('searchForm').addEventListener('submit', e => { e.preventDefault(); const p = document.getElementById('platformInput').value, n = document.getElementById('playerInput').value.trim(); if (!p || !n) return; handleSearch(n, p); });
+document.getElementById('themeToggle').addEventListener('click', () => { config.theme = config.theme === 'dark' ? 'light' : 'dark'; saveConfig(config); applyTheme(); router(); });
+const applyTheme = () => { document.documentElement.setAttribute('data-theme', config.theme); document.getElementById('themeToggle').textContent = config.theme === 'dark' ? '☀️ Light Theme' : '🌙 Dark Theme'; };
+
+applyTheme(); updateChip(); router();
+window.addEventListener('hashchange', router);
+</script>
+</body>
+</html>

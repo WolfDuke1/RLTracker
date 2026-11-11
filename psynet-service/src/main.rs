@@ -10,17 +10,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-// We import the PsyNet client from the crate
-use psynet::PsyNet; 
+// Import the correct types from the psynet crate
+use psynet::{PsyNetClient, PsyNetRpc, PlayerId};
 
-// --- State containing the Token and the PsyNet Client ---
 #[derive(Clone)]
 struct AppState {
     internal_api_token: String,
-    psy_client: PsyNet,
+    psy_client: PsyNetClient,
 }
 
-// --- Struct matching what your index.html expects ---
 #[derive(Serialize)]
 struct RankData {
     playlist: String,
@@ -34,7 +32,6 @@ struct RankData {
     peak_tier: i32,
 }
 
-// --- Auth Check ---
 fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -46,50 +43,51 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCod
     Err(StatusCode::UNAUTHORIZED)
 }
 
-// --- Health Check Endpoint ---
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
-// --- Ranks Endpoint ---
 async fn get_ranks(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((platform, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    // 1. Check Auth
     if let Err(status) = check_auth(&headers, &state.internal_api_token) {
         return (status, "Unauthorized").into_response();
     }
 
     println!("Fetching real PsyNet data for: {} / {}", platform, id);
 
-    // 2. Fetch data from PsyNet
-    // Depending on the exact version of the rlapi crate, this function might be called 
-    // `.get_player_ranks(...)` or `.get_skill(...)`. 
-    // If the compiler gives an error here, check the rlapi documentation for the correct method.
-    match state.psy_client.get_player_skills(&platform, &id).await {
-        Ok(player_skills) => {
+    // Create the PlayerId required by the API
+    let player_id = PlayerId {
+        platform: platform,
+        id: id,
+    };
+
+    // Use the correct RPC method: get_players_skills
+    match state.psy_client.get_players_skills(vec![player_id]).await {
+        Ok(players_with_skills) => {
             let mut response_data = Vec::new();
 
-            // 3. Map the PsyNet data to our frontend structure
-            for skill in player_skills {
-                if skill.playlist_id == 10 || skill.playlist_id == 11 || skill.playlist_id == 13 {
-                    response_data.push(RankData {
-                        playlist: skill.playlist_id.to_string(),
-                        mmr: skill.mmr,
-                        tier: skill.tier,
-                        division: skill.division.to_string(),
-                        matches_played: skill.matches_played,
-                        win_rate: if skill.matches_played > 0 {
-                            ((skill.wins as f32 / skill.matches_played as f32) * 100.0) as i32
-                        } else {
-                            0
-                        },
-                        win_streak: skill.win_streak,
-                        peak_mmr: skill.peak_mmr,
-                        peak_tier: skill.peak_tier,
-                    });
+            if let Some(player) = players_with_skills.first() {
+                for skill in &player.skills {
+                    if skill.playlist_id == 10 || skill.playlist_id == 11 || skill.playlist_id == 13 {
+                        response_data.push(RankData {
+                            playlist: skill.playlist_id.to_string(),
+                            mmr: skill.mmr,
+                            tier: skill.tier,
+                            division: skill.division.to_string(),
+                            matches_played: skill.matches_played,
+                            win_rate: if skill.matches_played > 0 {
+                                ((skill.wins as f32 / skill.matches_played as f32) * 100.0) as i32
+                            } else {
+                                0
+                            },
+                            win_streak: skill.win_streak,
+                            peak_mmr: skill.peak_mmr,
+                            peak_tier: skill.peak_tier,
+                        });
+                    }
                 }
             }
 
@@ -102,7 +100,6 @@ async fn get_ranks(
     }
 }
 
-// --- Main Function ---
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -113,10 +110,8 @@ async fn main() {
 
     println!("Initializing PsyNet Client...");
     
-    // Initialize the client. 
-    // The rlapi crate usually reads your EPIC_ACCOUNT_ID, EPIC_DEVICE_ID, etc. automatically from the environment.
-    // If it requires parameters, you may need to pass them here like: PsyNet::new("epic", "id", ...)
-    let psy_client = PsyNet::new().await.expect("Failed to initialize PsyNet. Check your Epic environment variables.");
+    // Initialize the client (this reads your Epic credentials from the environment)
+    let psy_client = PsyNetClient::new().await.expect("Failed to initialize PsyNet. Check your Epic environment variables.");
     
     println!("PsyNet Client initialized successfully!");
 

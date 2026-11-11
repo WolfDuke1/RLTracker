@@ -24,6 +24,7 @@ const settingsSchema = new mongoose.Schema({
   disabledFeatures: { type: [String], default: [] },
   popupText: { type: String, default: '' },
   popupExpiry: { type: Date, default: null },
+  popupId: { type: String, default: '' },
   apiUsageCount: { type: Number, default: 0 }
 });
 const Settings = mongoose.model('Settings', settingsSchema);
@@ -100,7 +101,13 @@ app.get('/api/player/:platform/:id/replays', async (req, res) => {
     if (!response.ok) throw new Error(`Ballchasing API error: ${response.status}`);
     const data = await response.json();
     const normalized = (data.list || []).map(r => ({
-      id: r.id, date: r.date, playlist: r.playlist_id, duration: r.duration, map: r.map_name, teams: r.teams,
+      id: r.id, 
+      date: r.date, 
+      playlist: r.playlist_id, 
+      duration: r.duration, 
+      map: r.map_name, 
+      teams: r.teams,
+      season: r.season, // <-- ADDED: Pass the season to frontend
       players: r.players.map(p => ({
         name: p.name, platform: p.platform,
         stats: { score: p.stats?.score ?? 0, goals: p.stats?.goals ?? 0, assists: p.stats?.assists ?? 0, saves: p.stats?.saves ?? 0, shots: p.stats?.shots ?? 0, mvps: p.stats?.mvps ?? 0, possession: p.stats?.possession ?? 0, demos: p.stats?.demo?.inflicted ?? 0, boost_bpm: p.stats?.boost?.bpm ?? 0 }
@@ -189,7 +196,6 @@ app.post('/api/admin/news', verifyToken, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// NEW: Edit News Route
 app.put('/api/admin/news/:id', verifyToken, async (req, res) => {
   try {
     const post = await News.findByIdAndUpdate(req.params.id, req.body, { new: true });

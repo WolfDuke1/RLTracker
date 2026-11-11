@@ -320,8 +320,25 @@
 </div>
 
 <script>
-const DEFAULT_CONFIG = { player: { platform: '', id: '', name: '' }, theme: 'dark', demoMode: true, season: '12', rankView: 'list' };
-const loadConfig = () => { try { return { ...DEFAULT_CONFIG, ...JSON.parse(localStorage.getItem('rlConfig') || '{}') }; } catch { return { ...DEFAULT_CONFIG }; } };
+const DEFAULT_CONFIG = { 
+  player: { platform: '', id: '', name: '' }, 
+  theme: 'dark', 
+  demoMode: false, 
+  season: '12', 
+  rankView: 'list',
+  ballchasingUrl: 'https://ballchasing-service.onrender.com',
+  psynetUrl: 'https://rltracker-g6d7.onrender.com'
+};
+
+const loadConfig = () => { 
+  try { 
+    const stored = JSON.parse(localStorage.getItem('rlConfig') || '{}');
+    // Force demoMode to false regardless of what was stored previously
+    return { ...DEFAULT_CONFIG, ...stored, demoMode: false }; 
+  } catch { 
+    return { ...DEFAULT_CONFIG }; 
+  } 
+};
 const saveConfig = (cfg) => localStorage.setItem('rlConfig', JSON.stringify(cfg));
 let config = loadConfig();
 
@@ -448,46 +465,41 @@ const rankIconUrl = (tierIndex) => {
 
 const PLAYLISTS = { 10: { name: 'Ranked Duel 1v1', short: '1v1' }, 11: { name: 'Ranked Doubles 2v2', short: '2v2' }, 13: { name: 'Ranked Standard 3v3', short: '3v3' }, 0: { name: 'Casual', short: 'Casual' }, 27: { name: 'Dropshot', short: 'Dropshot' }, 28: { name: 'Hoops', short: 'Hoops' }, 29: { name: 'Rumble', short: 'Rumble' }, 30: { name: 'Snowday', short: 'Snowday' }, 34: { name: 'Heatseeker', short: 'Heatseeker' }, 35: { name: 'Tournament Matches', short: 'Tournament' } };
 
-const demoRanks = (season, playerName = 'You') => {
-  const hash = playerName.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
-  const mo = (12 - parseInt(season, 10)) * 50 + (hash % 100);
-  return [
-    { playlist: '0',  mmr: 1046 - mo, tier: 11, division: 2, win_streak: 1, matches_played: 89,  peak_tier: 12, peak_mmr: 1060 - mo, win_rate: 50 },
-    { playlist: '10', mmr: 1085 - mo, tier: 12, division: 3, win_streak: 2, matches_played: 147, peak_tier: 13, peak_mmr: 1100 - mo, win_rate: 50 },
-    { playlist: '11', mmr: 1287 - mo, tier: 14, division: 2, win_streak: 4, matches_played: 612, peak_tier: 15, peak_mmr: 1310 - mo, win_rate: 52 },
-    { playlist: '13', mmr: 1175 - mo, tier: 13, division: 1, win_streak: 0, matches_played: 203, peak_tier: 13, peak_mmr: 1175 - mo, win_rate: 51 },
-    { playlist: '27', mmr: 778 - mo,  tier: 9,  division: 3, win_streak: 0, matches_played: 1,   peak_tier: 9,  peak_mmr: 778 - mo,  win_rate: 50 },
-    { playlist: '28', mmr: 969 - mo,  tier: 11, division: 2, win_streak: 4, matches_played: 5,   peak_tier: 11, peak_mmr: 969 - mo,  win_rate: 55 },
-    { playlist: '29', mmr: 756 - mo,  tier: 6,  division: 3, win_streak: 0, matches_played: 1,   peak_tier: 6,  peak_mmr: 756 - mo,  win_rate: 40 },
-    { playlist: '30', mmr: 921 - mo,  tier: 15, division: 3, win_streak: 0, matches_played: 2,   peak_tier: 15, peak_mmr: 921 - mo,  win_rate: 50 },
-    { playlist: '34', mmr: 597 - mo,  tier: 5,  division: 2, win_streak: 0, matches_played: 0,   peak_tier: 5,  peak_mmr: 597 - mo,  win_rate: 0 },
-    { playlist: '35', mmr: 1393 - mo, tier: 15, division: 3, win_streak: 0, matches_played: 0,   peak_tier: 15, peak_mmr: 1393 - mo, win_rate: 0 },
-  ];
-};
-
-const demoMatches = (playerName = 'You') => {
-  const out = [];
-  for (let i = 0; i < 20; i++) {
-    const win = (i * 7 + 3) % 5 !== 0, yourScore = win ? 3 + (i % 3) : 1 + (i % 2), oppScore = win ? 1 + (i % 2) : 3 + (i % 3);
-    out.push({ id: `demo-${i}`, date: new Date(Date.now() - i * 1000 * 60 * 47).toISOString(), playlist: [10, 11, 13, 0, 27, 28, 29, 30, 34, 35][i % 10], mmr_delta: win ? (7 + (i % 3)) : -(6 + (i % 3)), teams: [{ score: yourScore, players: [{ name: playerName }] }, { score: oppScore, players: [{ name: 'Opponent' }] }], players: [{ name: playerName, platform: 'epic', stats: { score: 200 + (i * 37) % 400, goals: yourScore, assists: i % 3, saves: i % 4, shots: yourScore + 1, mvps: i % 2 === 0 ? 1 : 0 } }] });
-  }
-  return out;
-};
-
-const demoMMRHistory = (playlist) => {
-  const pts = []; let mmr = playlist === 10 ? 1060 : playlist === 13 ? 1150 : playlist === 0 ? 1050 : 1250;
-  for (let i = 30; i >= 0; i--) { mmr += Math.round((Math.random() - 0.42) * 14); pts.push({ timestamp: Date.now() - i * 86400000, mmr }); }
-  return pts;
-};
-
-const demoLeaderboard = (limit = 100) => Array.from({ length: limit }, (_, i) => ({ name: `Player${i + 1}`, mmr: 2500 - i * 15, tier: 22, division: 1, wins: 500 - i * 4, losses: 200 - i * 2 }));
+// Since demoMode is false, demo arrays are no longer needed, but keeping definitions just in case for empty states
 
 const api = {
   hasPlayer: () => !!config.player.name,
-  ranks: (season, player = config.player) => config.demoMode ? Promise.resolve(demoRanks(season, player.name)) : fetch(`/api/psynet/ranks/${player.platform}/${player.id}?season=${season}`).then(r => r.json()),
-  matches: (player = config.player) => config.demoMode ? Promise.resolve(demoMatches(player.name)) : fetch(`/api/ballchasing/player/${player.platform}/${player.id}/replays`).then(r => r.json()),
-  mmrHistory: (playlist) => config.demoMode ? Promise.resolve(demoMMRHistory(playlist)) : fetch(`/api/psynet/player/${config.player.platform}/${config.player.id}/mmr-history?playlist=${playlist}&days=30`).then(r => r.json()),
-  leaderboard: () => config.demoMode ? Promise.resolve(demoLeaderboard()) : fetch(`/api/ballchasing/leaderboard?limit=100`).then(r => r.json()),
+  playerPath: function() {
+    const p = config.player;
+    return `${p.platform}/${encodeURIComponent(p.id)}`;
+  },
+  ranks: function(season, player = config.player) {
+    const path = `${player.platform}/${encodeURIComponent(player.id)}`;
+    return fetch(`${config.psynetUrl}/api/ranks/${path}?season=${season}`).then(r => {
+      if (!r.ok) throw new Error('Network response was not ok');
+      return r.json();
+    });
+  },
+  matches: function(player = config.player) {
+    const path = `${player.platform}/${encodeURIComponent(player.id)}`;
+    return fetch(`${config.ballchasingUrl}/api/player/${path}/replays`).then(r => {
+      if (!r.ok) throw new Error('Network response was not ok');
+      return r.json();
+    });
+  },
+  mmrHistory: function(playlist = 11, days = 30) {
+    const path = `${config.player.platform}/${encodeURIComponent(config.player.id)}`;
+    return fetch(`${config.psynetUrl}/api/player/${path}/mmr-history?playlist=${playlist}&days=${days}`).then(r => {
+      if (!r.ok) throw new Error('Network response was not ok');
+      return r.json();
+    });
+  },
+  leaderboard: function(playlist = 11, limit = 25) {
+    return fetch(`${config.ballchasingUrl}/api/leaderboard?playlist=${playlist}&limit=${limit}`).then(r => {
+      if (!r.ok) throw new Error('Network response was not ok');
+      return r.json();
+    });
+  },
 };
 
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -537,7 +549,7 @@ function renderHome(root) {
 }
 
 async function renderDashboard(root) {
-  if (!api.hasPlayer()) { root.innerHTML = `<div class="card" style="max-width:600px;margin:60px auto"><div class="empty"><h2>Welcome</h2><p style="margin-bottom:20px">Search for a player to get started.</p><button class="btn" onclick="location.hash='#/home'">Go to Home</button></div></div>`; return; }
+  if (!api.hasPlayer()) { root.innerHTML = `<div class="card" style="max-width:600px;margin:60px auto"><div class="empty"><h2>Welcome</h2><p style="margin-bottom:20px">Use the search bar above to track a player.</p></div></div>`; return; }
   root.innerHTML = `<div class="spinner"></div>`;
   try {
     const [ranks, matches] = await Promise.all([api.ranks(config.season).catch(() => []), api.matches().catch(() => [])]);
@@ -598,7 +610,7 @@ async function renderDashboard(root) {
     document.getElementById('fRes').addEventListener('change', applyMatchFilters); 
     applyMatchFilters();
 
-  } catch (err) { root.innerHTML = `<div class="card"><div class="empty">Error loading dashboard</div></div>`; }
+  } catch (err) { root.innerHTML = `<div class="card"><div class="empty">Error loading dashboard. Check console for details.</div></div>`; }
 }
 
 async function renderLive(root) {

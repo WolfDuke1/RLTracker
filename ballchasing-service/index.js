@@ -65,8 +65,8 @@ app.post('/api/settings', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { bannerText, bannerExpiry } = req.body;
-  const newSettings = { bannerText, bannerExpiry };
+const { bannerText, bannerExpiry, seasonEnd } = req.body;
+const newSettings = { bannerText, bannerExpiry, seasonEnd };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
   res.json({ success: true, settings: newSettings });
 });

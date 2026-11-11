@@ -8,10 +8,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 const PORT = process.env.PORT || 3001;
+
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
+// Ensure settings file exists with default structure
 if (!fs.existsSync(SETTINGS_FILE)) {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ bannerText: '', bannerExpiry: null }));
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ bannerText: '', bannerExpiry: null, seasonEnd: null }));
 }
 
 const cache = new Map();
@@ -51,10 +53,28 @@ app.get('/api/player/:platform/:id/replays', async (req, res) => {
   }
 });
 
+// --- STEAM API ROUTE ---
+app.get('/api/steam-count', async (req, res) => {
+  try {
+    const response = await fetch('https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=252950');
+    const data = await response.json();
+    res.json({ count: data.response?.player_count || null });
+  } catch (error) {
+    console.error('Steam API error:', error.message);
+    res.status(500).json({ count: null });
+  }
+});
+
 // --- SETTINGS ROUTES ---
 app.get('/api/settings', (req, res) => {
-  const settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-  res.json(settings);
+  try {
+    const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+    const settings = JSON.parse(raw);
+    // Merge with defaults to ensure seasonEnd exists if using an old file
+    res.json({ bannerText: '', bannerExpiry: null, seasonEnd: null, ...settings });
+  } catch (e) {
+    res.json({ bannerText: '', bannerExpiry: null, seasonEnd: null });
+  }
 });
 
 app.post('/api/settings', (req, res) => {
@@ -65,12 +85,13 @@ app.post('/api/settings', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-const { bannerText, bannerExpiry, seasonEnd } = req.body;
-const newSettings = { bannerText, bannerExpiry, seasonEnd };
+  const { bannerText, bannerExpiry, seasonEnd } = req.body;
+  const newSettings = { bannerText, bannerExpiry, seasonEnd };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
   res.json({ success: true, settings: newSettings });
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
+// CRITICAL: Bind to 0.0.0.0 for Render
 app.listen(PORT, '0.0.0.0', () => console.log(`Service running on :${PORT}`));

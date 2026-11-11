@@ -10,15 +10,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-// Import the PsyNet client from your crate
-// Note: You might need to adjust these imports based on your exact psynet version.
-use psynet::PsyNetClient; 
+// We import the PsyNet client from the crate
+use psynet::PsyNet; 
 
 // --- State containing the Token and the PsyNet Client ---
 #[derive(Clone)]
 struct AppState {
     internal_api_token: String,
-    psy_client: PsyNetClient,
+    psy_client: PsyNet,
 }
 
 // --- Struct matching what your index.html expects ---
@@ -66,14 +65,15 @@ async fn get_ranks(
     println!("Fetching real PsyNet data for: {} / {}", platform, id);
 
     // 2. Fetch data from PsyNet
-    // The exact method name might be `get_player_skills` or `get_skill` depending on the crate version.
+    // Depending on the exact version of the rlapi crate, this function might be called 
+    // `.get_player_ranks(...)` or `.get_skill(...)`. 
+    // If the compiler gives an error here, check the rlapi documentation for the correct method.
     match state.psy_client.get_player_skills(&platform, &id).await {
         Ok(player_skills) => {
             let mut response_data = Vec::new();
 
             // 3. Map the PsyNet data to our frontend structure
             for skill in player_skills {
-                // We only want Ranked 1v1 (10), 2v2 (11), and 3v3 (13)
                 if skill.playlist_id == 10 || skill.playlist_id == 11 || skill.playlist_id == 13 {
                     response_data.push(RankData {
                         playlist: skill.playlist_id.to_string(),
@@ -81,7 +81,6 @@ async fn get_ranks(
                         tier: skill.tier,
                         division: skill.division.to_string(),
                         matches_played: skill.matches_played,
-                        // Calculate win rate if not provided directly
                         win_rate: if skill.matches_played > 0 {
                             ((skill.wins as f32 / skill.matches_played as f32) * 100.0) as i32
                         } else {
@@ -98,7 +97,6 @@ async fn get_ranks(
         }
         Err(e) => {
             println!("PsyNet Error: {:?}", e);
-            // If the player doesn't exist or the API fails
             (StatusCode::NOT_FOUND, "Player not found or PsyNet API error").into_response()
         }
     }
@@ -113,10 +111,13 @@ async fn main() {
     let internal_api_token = std::env::var("INTERNAL_API_TOKEN")
         .unwrap_or_else(|_| "default_token".to_string());
 
-    // Initialize the PsyNet Client
-    // This client automatically reads EPIC_ACCOUNT_ID, EPIC_DEVICE_ID, etc. from your env variables.
     println!("Initializing PsyNet Client...");
-    let psy_client = PsyNetClient::new().await.expect("Failed to initialize PsyNet Client. Check your Epic credentials.");
+    
+    // Initialize the client. 
+    // The rlapi crate usually reads your EPIC_ACCOUNT_ID, EPIC_DEVICE_ID, etc. automatically from the environment.
+    // If it requires parameters, you may need to pass them here like: PsyNet::new("epic", "id", ...)
+    let psy_client = PsyNet::new().await.expect("Failed to initialize PsyNet. Check your Epic environment variables.");
+    
     println!("PsyNet Client initialized successfully!");
 
     let state = Arc::new(AppState {

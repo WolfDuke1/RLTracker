@@ -10,13 +10,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-// --- State voor je API Token ---
+// Import the PsyNet client from your crate
+// Note: You might need to adjust these imports based on your exact psynet version.
+use psynet::PsyNetClient; 
+
+// --- State containing the Token and the PsyNet Client ---
 #[derive(Clone)]
 struct AppState {
     internal_api_token: String,
+    psy_client: PsyNetClient,
 }
 
-// --- Structs voor de JSON Response ---
+// --- Struct matching what your index.html expects ---
 #[derive(Serialize)]
 struct RankData {
     playlist: String,
@@ -30,7 +35,7 @@ struct RankData {
     peak_tier: i32,
 }
 
-// --- Auth Middleware ---
+// --- Auth Check ---
 fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -58,65 +63,78 @@ async fn get_ranks(
         return (status, "Unauthorized").into_response();
     }
 
-    println!("Fetching ranks for platform: {}, id: {}", platform, id);
+    println!("Fetching real PsyNet data for: {} / {}", platform, id);
 
-    // 2. HIER KOMT JOUW PSYNET LOGICA
-    // In een echt project roep je hier je PsyNet crate/API aan met de `platform` en `id`.
-    // Voor nu sturen we een voorbeeld response terug om te testen of de connectie werkt.
-    
-    /* 
-    let ranks = fetch_from_psynet(&platform, &id).await;
-    if ranks.is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Psynet error").into_response();
-    }
-    */
+    // 2. Fetch data from PsyNet
+    // The exact method name might be `get_player_skills` or `get_skill` depending on the crate version.
+    match state.psy_client.get_player_skills(&platform, &id).await {
+        Ok(player_skills) => {
+            let mut response_data = Vec::new();
 
-    // Tijdelijke mock data (vervang dit met echte data)
-    let mock_data = vec![
-        RankData {
-            playlist: "11".to_string(),
-            mmr: 1200,
-            tier: 16,
-            division: "II".to_string(),
-            matches_played: 150,
-            win_rate: 55,
-            win_streak: 2,
-            peak_mmr: 1250,
-            peak_tier: 17,
+            // 3. Map the PsyNet data to our frontend structure
+            for skill in player_skills {
+                // We only want Ranked 1v1 (10), 2v2 (11), and 3v3 (13)
+                if skill.playlist_id == 10 || skill.playlist_id == 11 || skill.playlist_id == 13 {
+                    response_data.push(RankData {
+                        playlist: skill.playlist_id.to_string(),
+                        mmr: skill.mmr,
+                        tier: skill.tier,
+                        division: skill.division.to_string(),
+                        matches_played: skill.matches_played,
+                        // Calculate win rate if not provided directly
+                        win_rate: if skill.matches_played > 0 {
+                            ((skill.wins as f32 / skill.matches_played as f32) * 100.0) as i32
+                        } else {
+                            0
+                        },
+                        win_streak: skill.win_streak,
+                        peak_mmr: skill.peak_mmr,
+                        peak_tier: skill.peak_tier,
+                    });
+                }
+            }
+
+            (StatusCode::OK, Json(response_data)).into_response()
         }
-    ];
-
-    (StatusCode::OK, Json(mock_data)).into_response()
+        Err(e) => {
+            println!("PsyNet Error: {:?}", e);
+            // If the player doesn't exist or the API fails
+            (StatusCode::NOT_FOUND, "Player not found or PsyNet API error").into_response()
+        }
+    }
 }
 
 // --- Main Function ---
 #[tokio::main]
 async fn main() {
-    // Laad environment variables (.env bestand)
     dotenvy::dotenv().ok();
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let internal_api_token = std::env::var("INTERNAL_API_TOKEN")
         .unwrap_or_else(|_| "default_token".to_string());
 
+    // Initialize the PsyNet Client
+    // This client automatically reads EPIC_ACCOUNT_ID, EPIC_DEVICE_ID, etc. from your env variables.
+    println!("Initializing PsyNet Client...");
+    let psy_client = PsyNetClient::new().await.expect("Failed to initialize PsyNet Client. Check your Epic credentials.");
+    println!("PsyNet Client initialized successfully!");
+
     let state = Arc::new(AppState {
         internal_api_token,
+        psy_client,
     });
 
-    // CORS instellen zodat je frontend (Cloudflare) verbinding mag maken
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Router opzetten
     let app = Router::new()
-        .route("/health", get(health_check)) // Lost je Render Health Check op!
-        .route("/v1/ranks/:platform/:id", get(get_ranks)) // De route die je frontend verwacht
+        .route("/health", get(health_check))
+        .route("/v1/ranks/:platform/:id", get(get_ranks))
         .layer(cors)
         .with_state(state);
 
-    // Server starten op 0.0.0.0
     let addr = SocketAddr::from(([0, 0, 0, 0], port.parse().unwrap()));
     println!("PsyNet service on :{}", port);
 

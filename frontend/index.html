@@ -20,7 +20,6 @@
   html, body { height: 100%; }
   body { background: var(--bg); color: var(--text); overflow-x: hidden; }
   
-  /* Full-Page Background Overlay (Only on Home) */
   .app.is-home::before {
     content: '';
     position: fixed;
@@ -63,6 +62,10 @@
   .sidebar nav a svg { width: 18px; height: 18px; }
   
   main { display: flex; flex-direction: column; height: 100%; overflow: hidden; position: relative; }
+  
+  /* BANNER */
+  #global-banner { display: none; padding: 12px; text-align: center; font-weight: 700; background: var(--accent); color: var(--accent-fg); z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+
   .topbar { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 16px; flex-wrap: wrap; flex-shrink: 0; z-index: 10; }
   .search { display: flex; gap: 8px; flex: 1; max-width: 500px; min-width: 280px; }
   input, select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 10px 14px; border-radius: 10px; font-size: 0.85rem; outline: none; }
@@ -76,6 +79,8 @@
   .btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
   .btn.active { background: var(--accent); color: var(--accent-fg); }
   .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.danger { background: rgba(239, 68, 68, 0.15); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.3); }
+  .btn.danger:hover { background: rgba(239, 68, 68, 0.25); }
   
   .view { padding: 24px; flex: 1; overflow-y: auto; overflow-x: hidden; z-index: 1; }
   .view.no-scroll { overflow: hidden; display: flex; flex-direction: column; }
@@ -282,6 +287,21 @@
     gap: 16px;
   }
 
+  /* ADMIN PAGE & LOGIN */
+  .admin-login-container { display: flex; align-items: center; justify-content: center; height: 100%; width: 100%; }
+  .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 40px; width: 100%; max-width: 400px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+  .login-card h1 { font-size: 1.5rem; font-weight: 800; margin-bottom: 24px; text-align: center; }
+  .login-card input { width: 100%; padding: 14px; margin-bottom: 16px; font-size: 1rem; }
+  .login-card button { width: 100%; padding: 14px; font-size: 1rem; }
+  .login-error { color: var(--red); font-size: 0.85rem; text-align: center; margin-bottom: 16px; display: none; }
+
+  .admin-form { display: flex; flex-direction: column; gap: 16px; max-width: 600px; }
+  .admin-form label { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; display: block; }
+  .admin-form input { width: 100%; padding: 12px; }
+  .status-msg { padding: 12px; border-radius: 8px; font-weight: 600; font-size: 0.85rem; margin-top: 12px; display: none; }
+  .status-msg.success { display: block; background: rgba(34, 197, 94, 0.15); color: var(--green); border: 1px solid rgba(34, 197, 94, 0.3); }
+  .status-msg.error { display: block; background: rgba(239, 68, 68, 0.15); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.3); }
+
   .spinner { width: 24px; height: 24px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 40px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .empty { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 0.9rem; }
@@ -291,7 +311,9 @@
 <div class="app" id="app">
   <aside class="sidebar">
     <div class="brand">RL <span>Modern</span></div>
-    <nav id="nav">
+    
+    <!-- NORMAL NAVIGATION -->
+    <nav id="main-nav">
       <a href="#/home" data-route="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Home</span></a>
       <a href="#/dashboard" data-route="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
       <a href="#/live" data-route="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>Semi-Live</span></a>
@@ -299,12 +321,29 @@
       <a href="#/distribution" data-route="distribution"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5 2 7L12 16l-6.5 4.5 2-7L2 9h7z"/></svg><span>Distribution</span></a>
       <a href="#/compare" data-route="compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Compare</span></a>
       <a href="#/leaderboard" data-route="leaderboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span>Leaderboard</span></a>
+      <a href="#/admin" data-route="admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg><span>Admin</span></a>
     </nav>
-    <div class="sidebar-footer"><button class="btn secondary" id="themeToggle" style="width:100%">🌙 Theme</button></div>
+
+    <!-- ADMIN NAVIGATION (Hidden by default) -->
+    <nav id="admin-nav" style="display:none;">
+      <div style="font-size: 0.65rem; text-transform: uppercase; color: var(--text-muted); padding: 0 12px; margin-bottom: 8px; font-weight: 700; letter-spacing: 1px;">Admin Panel</div>
+      <a href="#/admin" data-route="admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Banner Config</span></a>
+      
+      <div style="flex:1"></div>
+      
+      <a href="#" onclick="adminLogout(event)" style="color: var(--red); margin-top: 16px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span>Log Out</span>
+      </a>
+      <a href="#/home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span>Return to Site</span></a>
+    </nav>
+
+    <div class="sidebar-footer" id="theme-footer"><button class="btn secondary" id="themeToggle" style="width:100%">🌙 Theme</button></div>
   </aside>
 
   <main>
-    <header class="topbar">
+    <div id="global-banner"></div>
+    <header class="topbar" id="main-topbar">
       <form class="search" id="searchForm">
         <select id="platformInput" required><option value="" disabled selected>Platform</option><option value="epic">Epic Games</option><option value="steam">Steam</option><option value="psn">PlayStation</option><option value="xbl">Xbox</option><option value="switch">Nintendo</option></select>
         <input type="text" id="playerInput" placeholder="Enter player name or ID" />
@@ -333,7 +372,6 @@ const DEFAULT_CONFIG = {
 const loadConfig = () => { 
   try { 
     const stored = JSON.parse(localStorage.getItem('rlConfig') || '{}');
-    // Force demoMode to false regardless of what was stored previously
     return { ...DEFAULT_CONFIG, ...stored, demoMode: false }; 
   } catch { 
     return { ...DEFAULT_CONFIG }; 
@@ -465,8 +503,6 @@ const rankIconUrl = (tierIndex) => {
 
 const PLAYLISTS = { 10: { name: 'Ranked Duel 1v1', short: '1v1' }, 11: { name: 'Ranked Doubles 2v2', short: '2v2' }, 13: { name: 'Ranked Standard 3v3', short: '3v3' }, 0: { name: 'Casual', short: 'Casual' }, 27: { name: 'Dropshot', short: 'Dropshot' }, 28: { name: 'Hoops', short: 'Hoops' }, 29: { name: 'Rumble', short: 'Rumble' }, 30: { name: 'Snowday', short: 'Snowday' }, 34: { name: 'Heatseeker', short: 'Heatseeker' }, 35: { name: 'Tournament Matches', short: 'Tournament' } };
 
-// Since demoMode is false, demo arrays are no longer needed, but keeping definitions just in case for empty states
-
 const api = {
   hasPlayer: () => !!config.player.name,
   playerPath: function() {
@@ -511,6 +547,29 @@ const matchResult = (match) => {
   const yourTeam = match.teams[teamIdx] || match.teams[0], oppTeam = match.teams[1 - teamIdx] || match.teams[1];
   return { win: (yourTeam?.score ?? 0) > (oppTeam?.score ?? 0), yourScore: yourTeam?.score ?? 0, oppScore: oppTeam?.score ?? 0 };
 };
+
+/* ── BANNER FETCHER ── */
+async function fetchBanner() {
+  try {
+    const res = await fetch(`${config.ballchasingUrl}/api/settings`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const bannerEl = document.getElementById('global-banner');
+    
+    if (data.bannerText) {
+      if (data.bannerExpiry && new Date(data.bannerExpiry) < new Date()) {
+        bannerEl.style.display = 'none';
+      } else {
+        bannerEl.textContent = data.bannerText;
+        bannerEl.style.display = 'block';
+      }
+    } else {
+      bannerEl.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('Failed to load banner', err);
+  }
+}
 
 function renderHome(root) {
   const recent = getRecentPlayers();
@@ -592,7 +651,6 @@ async function renderDashboard(root) {
           <div class="card"><h2>Lifetime Core Stats</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">${[['Matches', life.matches], ['Wins', life.wins], ['Win Rate', Math.round((life.wins / life.matches) * 100) + '%'], ['MVPs', life.mvps], ['Goals', life.goals], ['Assists', life.assists], ['Saves', life.saves], ['Shots', life.shots]].map(([l, v]) => `<div><div class="stat-big">${v}</div><div class="stat-label">${l}</div></div>`).join('')}</div></div>
         </div>
       </div>
-      <!-- MATCH HISTORY MOVED HERE -->
       <div class="card" style="margin-top:20px">
         <h2>Match History <div style="display:flex;gap:8px"><select id="fPl" style="padding:6px 12px;font-size:0.8rem"><option value="all">All playlists</option>${Object.entries(PLAYLISTS).map(([id, p]) => `<option value="${id}">${p.name}</option>`).join('')}</select><select id="fRes" style="padding:6px 12px;font-size:0.8rem"><option value="all">All results</option><option value="win">Wins</option><option value="loss">Losses</option></select></div></h2>
         <div id="mList"></div>
@@ -600,7 +658,6 @@ async function renderDashboard(root) {
     `;
     document.getElementById('seasonSelect').addEventListener('change', e => { config.season = e.target.value; saveConfig(config); renderDashboard(root); });
     
-    // Initialize match history filters
     const applyMatchFilters = () => {
       const p = document.getElementById('fPl').value, r = document.getElementById('fRes').value;
       const filt = matches.filter(m => { if (p !== 'all' && String(m.playlist) !== p) return false; const res = matchResult(m); if (r === 'win' && !res.win) return false; if (r === 'loss' && res.win) return false; return true; });
@@ -920,6 +977,143 @@ async function renderLeaderboard(root) {
   } catch { document.getElementById('lbTable').innerHTML = `<div class="empty">Error loading leaderboard</div>`; }
 }
 
+/* ── ADMIN PAGE (LOGIN & DASHBOARD) ── */
+async function renderAdmin(root) {
+  const adminToken = localStorage.getItem('rlAdminToken');
+
+  // If no token, show login screen
+  if (!adminToken) {
+    root.innerHTML = `
+      <div class="admin-login-container">
+        <div class="login-card">
+          <h1>Admin Login</h1>
+          <div id="loginError" class="login-error">Incorrect password.</div>
+          <form id="loginForm">
+            <input type="password" id="adminPwdLogin" placeholder="Enter Admin Password" required />
+            <button type="submit" class="btn">Log In</button>
+          </form>
+        </div>
+      </div>
+    `;
+    
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pwd = document.getElementById('adminPwdLogin').value;
+      const btn = e.target.querySelector('button');
+      const err = document.getElementById('loginError');
+      
+      btn.textContent = 'Verifying...';
+      btn.disabled = true;
+      err.style.display = 'none';
+
+      try {
+        // Verify by attempting to post an empty payload. The backend checks the auth header first.
+        const res = await fetch(`${config.ballchasingUrl}/api/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${pwd}` },
+          body: JSON.stringify({ bannerText: null, bannerExpiry: null }) // Dummy payload just to test auth
+        });
+        
+        if (res.ok) {
+          // Save the verified token to localStorage
+          localStorage.setItem('rlAdminToken', pwd);
+          renderAdmin(root); // Re-render as authenticated
+        } else {
+          err.textContent = 'Incorrect password.';
+          err.style.display = 'block';
+          btn.textContent = 'Log In';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        err.textContent = 'Network error. Backend might be sleeping.';
+        err.style.display = 'block';
+        btn.textContent = 'Log In';
+        btn.disabled = false;
+      }
+    });
+    return;
+  }
+
+  // Authenticated Dashboard
+  root.innerHTML = `
+    <h1 style="font-size:1.5rem;font-weight:800;margin-bottom:24px">Admin Dashboard</h1>
+    <div class="card">
+      <h2>Global Banner Configuration</h2>
+      <form class="admin-form" id="adminForm">
+        <div>
+          <label>Banner Text</label>
+          <input type="text" id="bannerText" placeholder="e.g., Scheduled Maintenance at 10 PM EST" />
+        </div>
+        <div>
+          <label>Banner Expiry (Optional)</label>
+          <input type="datetime-local" id="bannerExpiry" />
+        </div>
+        <button type="submit" class="btn" style="margin-top:8px">Save Settings</button>
+        <div id="adminStatus" class="status-msg"></div>
+      </form>
+    </div>
+  `;
+
+  // Load current settings
+  try {
+    const res = await fetch(`${config.ballchasingUrl}/api/settings`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.bannerText) document.getElementById('bannerText').value = data.bannerText;
+      if (data.bannerExpiry) {
+        const d = new Date(data.bannerExpiry);
+        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+        document.getElementById('bannerExpiry').value = d.toISOString().slice(0, 16);
+      }
+    }
+  } catch(e) {}
+
+  document.getElementById('adminForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = document.getElementById('bannerText').value;
+    const expiryVal = document.getElementById('bannerExpiry').value;
+    const expiry = expiryVal ? new Date(expiryVal).toISOString() : null;
+    const status = document.getElementById('adminStatus');
+    const token = localStorage.getItem('rlAdminToken');
+
+    status.className = 'status-msg';
+    status.textContent = 'Saving...';
+    
+    try {
+      const res = await fetch(`${config.ballchasingUrl}/api/settings`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ bannerText: text, bannerExpiry: expiry })
+      });
+      
+      if (res.ok) {
+        status.className = 'status-msg success';
+        status.textContent = 'Settings saved successfully!';
+        fetchBanner(); // Refresh the global banner
+      } else if (res.status === 401) {
+        localStorage.removeItem('rlAdminToken'); // Token expired/wrong
+        renderAdmin(root); // Force back to login
+      } else {
+        status.className = 'status-msg error';
+        status.textContent = 'Error: Server error.';
+      }
+    } catch (err) {
+      status.className = 'status-msg error';
+      status.textContent = 'Network error. Make sure Render is awake.';
+    }
+  });
+}
+
+window.adminLogout = (e) => {
+  e.preventDefault();
+  localStorage.removeItem('rlAdminToken');
+  location.hash = '#/home';
+  location.reload();
+};
+
 function toast(m) { const d = document.createElement('div'); d.textContent = m; Object.assign(d.style, { position: 'fixed', bottom: '24px', right: '24px', background: 'var(--surface-2)', padding: '12px 18px', borderRadius: '10px', border: '1px solid var(--border)', zIndex: 999, transition: '0.3s', opacity: 0 }); document.body.appendChild(d); requestAnimationFrame(() => d.style.opacity = 1); setTimeout(() => { d.style.opacity = '0'; setTimeout(() => d.remove(), 300); }, 2200); }
 
 function handleSearch(name, platform) {
@@ -929,7 +1123,8 @@ function handleSearch(name, platform) {
 const updateChip = () => document.getElementById('chipName').textContent = config.player.name || 'No player';
 const setRankView = (view) => { config.rankView = view; saveConfig(config); renderDashboard(document.getElementById('view')); };
 
-const routes = { home: renderHome, dashboard: renderDashboard, live: renderLive, performance: renderPerformance, distribution: renderDistribution, compare: renderCompare, leaderboard: renderLeaderboard };
+const routes = { home: renderHome, dashboard: renderDashboard, live: renderLive, performance: renderPerformance, distribution: renderDistribution, compare: renderCompare, leaderboard: renderLeaderboard, admin: renderAdmin };
+
 function router() {
   if (window._liveInt) { clearInterval(window._liveInt); window._liveInt = null; }
   if (window._compareInt) { clearInterval(window._compareInt); window._compareInt = null; }
@@ -938,12 +1133,35 @@ function router() {
   const r = routes[h] ? h : 'home';
   
   const appEl = document.getElementById('app');
-  if (r === 'home') appEl.classList.add('is-home');
-  else appEl.classList.remove('is-home');
+  const mainNav = document.getElementById('main-nav');
+  const adminNav = document.getElementById('admin-nav');
+  const topbar = document.getElementById('main-topbar');
+  const themeFooter = document.getElementById('theme-footer');
+
+  if (r === 'admin') {
+    appEl.classList.remove('is-home');
+    mainNav.style.display = 'none';
+    adminNav.style.display = 'flex';
+    topbar.style.display = 'none';
+    themeFooter.style.display = 'none';
+  } else {
+    if (r === 'home') appEl.classList.add('is-home');
+    else appEl.classList.remove('is-home');
+    mainNav.style.display = 'flex';
+    adminNav.style.display = 'none';
+    topbar.style.display = 'flex';
+    themeFooter.style.display = 'flex';
+  }
 
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === r));
-  document.getElementById('searchForm').style.display = r === 'home' ? 'none' : 'flex';
-  const v = document.getElementById('view'); v.innerHTML = ''; v.className = r === 'home' ? 'view no-scroll' : 'view'; routes[r](v);
+  if(topbar.style.display !== 'none') {
+    document.getElementById('searchForm').style.display = r === 'home' ? 'none' : 'flex';
+  }
+
+  const v = document.getElementById('view'); 
+  v.innerHTML = ''; 
+  v.className = r === 'home' ? 'view no-scroll' : 'view'; 
+  routes[r](v);
   window.scrollTo(0, 0);
 }
 
@@ -951,7 +1169,7 @@ document.getElementById('searchForm').addEventListener('submit', e => { e.preven
 document.getElementById('themeToggle').addEventListener('click', () => { config.theme = config.theme === 'dark' ? 'light' : 'dark'; saveConfig(config); applyTheme(); router(); });
 const applyTheme = () => { document.documentElement.setAttribute('data-theme', config.theme); document.getElementById('themeToggle').textContent = config.theme === 'dark' ? '☀️ Light Theme' : '🌙 Dark Theme'; };
 
-applyTheme(); updateChip(); router();
+applyTheme(); updateChip(); fetchBanner(); router();
 window.addEventListener('hashchange', router);
 </script>
 </body>

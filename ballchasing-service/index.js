@@ -10,11 +10,9 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
-
-// --- DATABASE CONNECTION ---
 const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) { console.error('FATAL ERROR: MONGODB_URI is missing.'); process.exit(1); }
-mongoose.connect(MONGODB_URI).then(() => console.log('Connected to MongoDB Atlas')).catch(err => console.error('MongoDB error:', err));
+mongoose.connect(MONGODB_URI).then(() => console.log('Connected to MongoDB')).catch(err => console.error('MongoDB error:', err));
 
 // --- SCHEMAS ---
 const settingsSchema = new mongoose.Schema({
@@ -25,7 +23,7 @@ const settingsSchema = new mongoose.Schema({
   maintenanceMode: { type: Boolean, default: false },
   disabledFeatures: { type: [String], default: [] },
   popupText: { type: String, default: '' },
-  popupId: { type: String, default: '' },
+  popupExpiry: { type: Date, default: null },
   apiUsageCount: { type: Number, default: 0 }
 });
 const Settings = mongoose.model('Settings', settingsSchema);
@@ -53,26 +51,19 @@ const Favorite = mongoose.model('Favorite', favoriteSchema);
 // --- API USAGE TRACKER ---
 let apiCallsSinceLastSync = 0;
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') && !req.path.includes('/admin/')) {
-    apiCallsSinceLastSync++;
-  }
+  if (req.path.startsWith('/api/') && !req.path.includes('/admin/')) apiCallsSinceLastSync++;
   next();
 });
-
-// Sync API usage every 1 minute
 setInterval(async () => {
   if (apiCallsSinceLastSync > 0) {
     try {
       await Settings.findByIdAndUpdate('global_settings', { $inc: { apiUsageCount: apiCallsSinceLastSync } }, { upsert: true });
       apiCallsSinceLastSync = 0;
-    } catch (e) { console.error('Failed to sync API usage', e); }
+    } catch (e) {}
   }
 }, 60000);
 
-// --- HELPERS ---
-const logAction = async (action) => {
-  try { await Log.create({ action }); } catch (e) { console.error('Log error', e); }
-};
+const logAction = async (action) => { try { await Log.create({ action }); } catch (e) {} };
 
 // --- AUTH ---
 const verifyToken = (req, res, next) => {
@@ -95,7 +86,6 @@ app.post('/api/auth/login', async (req, res) => {
 // --- BALLCHASING API ---
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; 
-
 app.get('/api/player/:platform/:id/replays', async (req, res) => {
   const { platform, id } = req.params;
   const playerId = `${platform}:${id}`;
@@ -122,13 +112,11 @@ app.get('/api/player/:platform/:id/replays', async (req, res) => {
 });
 
 app.get('/api/leaderboard', async (req, res) => {
-  // Dummy leaderboard route for testing since Psynet is offline
-  const { playlist, limit } = req.query;
   res.json([
     { name: 'Mawkzy', mmr: 1950, wins: 150, losses: 50 },
     { name: 'Zen', mmr: 2100, wins: 200, losses: 40 },
     { name: 'Rise', mmr: 1800, wins: 120, losses: 60 }
-  ].slice(0, parseInt(limit) || 10));
+  ]);
 });
 
 // --- STEAM API ---
@@ -145,7 +133,7 @@ app.get('/api/steam-count', async (req, res) => {
 
 // --- FAVORITES ---
 app.post('/api/favorites/toggle', async (req, res) => {
-  const { name, platform, action } = req.body; // action: 'add' or 'remove'
+  const { name, platform, action } = req.body;
   try {
     if (action === 'add') await Favorite.findOneAndUpdate({ playerName: name, platform }, { $inc: { count: 1 } }, { upsert: true });
     else await Favorite.findOneAndUpdate({ playerName: name, platform }, { $inc: { count: -1 } });
@@ -197,6 +185,15 @@ app.post('/api/admin/news', verifyToken, async (req, res) => {
   try {
     const post = await News.create(req.body);
     await logAction(`Created news post: ${req.body.title}`);
+    res.json({ success: true, post });
+  } catch (e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// NEW: Edit News Route
+app.put('/api/admin/news/:id', verifyToken, async (req, res) => {
+  try {
+    const post = await News.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    await logAction(`Edited news post: ${post.title}`);
     res.json({ success: true, post });
   } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });

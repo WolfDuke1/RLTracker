@@ -8,9 +8,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 const PORT = process.env.PORT || 3001;
-
-// Note: On Render's free tier, this file resets when the server sleeps/redeploys.
-// For 100% persistence, you would connect a free database like MongoDB Atlas.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
 if (!fs.existsSync(SETTINGS_FILE)) {
@@ -75,4 +72,5 @@ app.post('/api/settings', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
-app.listen(PORT, () => console.log(`Service running on :${PORT}`));
+
+app.listen(PORT, '0.0.0.0', () => console.log(`Service running on :${PORT}`));

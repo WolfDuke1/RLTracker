@@ -23,7 +23,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 const BASE_URL: &str = "https://api.rlpp.psynet.gg/rpc";
 const GAME_VERSION: &str = "261031.63733.533021";
-const FEATURE_SET: &str = "PrimeUpdate60_FFE7A62B41040BB67F8829FD67F2EE8A";
+const FEATURE_SET: &str = "PrimeUpdate60_1";
 const PSY_SIG_KEY: &str = "c338bd36fb8c42b1a431d30add939fc7";
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -63,6 +63,11 @@ impl PsyNetClient {
             set_as_primary_account: true,
             epic_auth_ticket: access_token.to_string(),
             epic_account_id: account_id.to_string(),
+            // ADD THIS:
+            headers: vec![AuthHeader {
+                key: "PsyBuildSecret".to_string(),
+                value: "eba094a6fd9abbdf913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3".to_string(),
+            }],
         };
 
         let response: AuthPlayerResponse = self
@@ -611,6 +616,16 @@ struct AuthPlayerRequest {
     epic_auth_ticket: String,
     #[serde(rename = "EpicAccountID")]
     epic_account_id: String,
+    // ADD THIS NEW FIELD:
+    headers: Vec<AuthHeader>,
+}
+
+// ADD THIS NEW STRUCT:
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AuthHeader {
+    key: String,
+    value: String,
 }
 
 #[derive(Debug, Deserialize)]

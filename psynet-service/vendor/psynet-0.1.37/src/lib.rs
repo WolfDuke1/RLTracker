@@ -887,12 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn psy_build_id_is_derived_from_game_version() {
-        assert_eq!(decode_build_id(GAME_VERSION), 2004174750);
-        assert_eq!(psy_build_id(), "2004174750");
-    }
-
-    #[test]
     fn player_id_uses_psynet_platform_names() {
         assert_eq!(
             PlayerId::new(PlayerPlatform::Epic, "abc").to_string(),

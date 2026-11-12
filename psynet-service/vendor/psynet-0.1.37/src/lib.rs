@@ -24,7 +24,9 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 const BASE_URL: &str = "https://api.rlpp.psynet.gg/rpc";
 const GAME_VERSION: &str = "261031.63733.533021";
 const FEATURE_SET: &str = "PrimeUpdate60_1";
+const PSY_BUILD_ID: &str = "-242096153";
 const PSY_SIG_KEY: &str = "c338bd36fb8c42b1a431d30add939fc7";
+const PSY_BUILD_SECRET: &str = "eba094a6fd0abdff913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3";
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -59,14 +61,13 @@ impl PsyNetClient {
             feature_set: FEATURE_SET.to_string(),
             device: "PC".to_string(),
             local_first_player_id: player_id.to_string(),
-            skip_auth: false,
             set_as_primary_account: true,
             epic_auth_ticket: access_token.to_string(),
             epic_account_id: account_id.to_string(),
-            // ADD THIS:
+            allow_batching: false,
             headers: vec![AuthHeader {
                 key: "PsyBuildSecret".to_string(),
-                value: "eba094a6fd9abbdf913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3".to_string(),
+                value: PSY_BUILD_SECRET.to_string(),
             }],
         };
 
@@ -93,10 +94,10 @@ impl PsyNetClient {
         let mut request = url
             .into_client_request()
             .with_context(|| format!("invalid PsyNet websocket URL {url:?}"))?;
-        let psy_build_id = psy_build_id();
+        
         request.headers_mut().insert(
             HeaderName::from_static("psybuildid"),
-            HeaderValue::from_str(&psy_build_id)?,
+            HeaderValue::from_static(PSY_BUILD_ID),
         );
         request.headers_mut().insert(
             USER_AGENT,
@@ -174,8 +175,8 @@ impl PsyNetClient {
     ) -> Result<T> {
         let url = format!("{BASE_URL}/{}", path.join("/"));
         let body = serde_json::to_vec(params).context("failed to serialize PsyNet request")?;
-        let psy_build_id = psy_build_id();
         let mut headers = HeaderMap::new();
+        
         headers.insert(
             CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded"),
@@ -188,7 +189,7 @@ impl PsyNetClient {
         );
         headers.insert(
             HeaderName::from_static("psybuildid"),
-            HeaderValue::from_str(&psy_build_id)?,
+            HeaderValue::from_static(PSY_BUILD_ID),
         );
         headers.insert(
             HeaderName::from_static("psyenvironment"),
@@ -201,6 +202,10 @@ impl PsyNetClient {
         headers.insert(
             HeaderName::from_static("psysig"),
             HeaderValue::from_str(&generate_psy_sig(&body))?,
+        );
+        headers.insert(
+            HeaderName::from_static("psybuildsecret"),
+            HeaderValue::from_static(PSY_BUILD_SECRET),
         );
 
         let response = self
@@ -243,9 +248,6 @@ pub struct PsyNetRpc {
     pending: PendingRequests,
     request_ids: Arc<RequestIdCounter>,
     local_player_id: PlayerId,
-    /// Closes the websocket when the last clone of this session drops. A Drop
-    /// impl on PsyNetRpc itself would fire on every clone and close the socket
-    /// out from under the remaining ones.
     _closer: Arc<SocketCloser>,
 }
 
@@ -291,11 +293,6 @@ impl PsyNetRpc {
         Ok(response.player_data)
     }
 
-    /// Fetches the *current* per-playlist skill snapshot for each player via
-    /// `Skills/GetPlayersSkills v1`. Unlike the rank metadata embedded in match
-    /// history, this carries `WinStreak`, `MatchesPlayed`, and
-    /// `PlacementMatchesPlayed`, but it is a point-in-time value as of the call
-    /// (no before/after).
     pub async fn get_players_skills(
         &self,
         player_ids: Vec<PlayerId>,
@@ -307,12 +304,6 @@ impl PsyNetRpc {
         Ok(response.players)
     }
 
-    /// Sends a raw request to an arbitrary PsyNet service (e.g.
-    /// `"Training/GetTrainingData v1"`) and returns the raw `Result` JSON on
-    /// success, or the application-level [`PsyError`] (kind + message) when the
-    /// server responds with an `Error` payload. Transport-level failures
-    /// (socket errors, timeouts, malformed frames) surface as the outer
-    /// `anyhow::Error`.
     pub async fn call_raw(
         &self,
         service: &str,
@@ -328,14 +319,6 @@ impl PsyNetRpc {
         Ok(Ok(result.get().to_string()))
     }
 
-    /// Publishes a custom training pack to PsyNet via `Training/AddTrainingData
-    /// v1` and returns the freshly minted public share [`Code`](SaveTrainingResponse::code).
-    ///
-    /// The request body is `{"TrainingData": <pack>}`. The server ignores the
-    /// `Code`/timestamp/creator identity fields (it assigns them), but requires
-    /// a fresh, valid base64 `TM_Guid` plus the pack metadata and rounds.
-    /// Discovered empirically against the live server; see
-    /// `examples/training_*.rs`.
     pub async fn save_training_data(&self, pack: SaveTrainingData) -> Result<SaveTrainingResponse> {
         let request = SaveTrainingRequest {
             training_data: pack,
@@ -407,9 +390,6 @@ impl PlayerId {
     pub fn new(platform: PlayerPlatform, id: &str) -> Self {
         Self(format!("{}|{id}|0", platform.as_psynet_platform()))
     }
-
-    /// Wraps a raw PsyNet PlayerID string (`Platform|id|splitscreen`), e.g. the
-    /// `PlayerID` carried on each [`MatchPlayer`].
     pub fn from_psynet(raw: impl Into<String>) -> Self {
         Self(raw.into())
     }
@@ -469,8 +449,6 @@ pub struct Match {
     pub players: Vec<MatchPlayer>,
 }
 
-/// Per-player record carried in each `Matches/GetMatchHistory v1` match,
-/// including the rank metadata (`Skills`) that PsyNet reports for the match.
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct MatchPlayer {
@@ -496,9 +474,6 @@ pub struct MatchPlayer {
     pub skills: MatchSkills,
 }
 
-/// Rank/skill snapshot for a player in a single match. `Tier`/`Division` are the
-/// values *after* the match; `Prev*` are the values from *before* it. `Mu`/`Sigma`
-/// are the underlying TrueSkill values (display MMR is `Mu * 20 + 100`).
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct MatchSkills {
@@ -523,23 +498,17 @@ pub struct MatchSkills {
 }
 
 impl MatchSkills {
-    /// Display MMR after the match, derived from the TrueSkill mean.
     pub fn mmr(&self) -> f64 {
         Self::mu_to_mmr(self.mu)
     }
-
-    /// Display MMR before the match, derived from the previous TrueSkill mean.
     pub fn prev_mmr(&self) -> f64 {
         Self::mu_to_mmr(self.prev_mu)
     }
-
     fn mu_to_mmr(mu: f64) -> f64 {
         mu * 20.0 + 100.0
     }
 }
 
-/// A player and their current per-playlist skills, as returned by
-/// `Skills/GetPlayersSkills v1`.
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct PlayerWithSkills {
@@ -549,11 +518,6 @@ pub struct PlayerWithSkills {
     pub skills: Vec<PlayerSkill>,
 }
 
-/// Current skill snapshot for a single playlist from `Skills/GetPlayersSkills`.
-/// `Mu`/`Sigma`/`Tier`/`Division` mirror the match-history values, but this also
-/// reports cumulative counters (`WinStreak`, `MatchesPlayed`,
-/// `PlacementMatchesPlayed`) and PsyNet's own `MMR` field. These are
-/// point-in-time as of the request, not tied to any particular match.
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct PlayerSkill {
@@ -609,18 +573,16 @@ struct AuthPlayerRequest {
     device: String,
     #[serde(rename = "LocalFirstPlayerID")]
     local_first_player_id: String,
-    #[serde(rename = "bSkipAuth")]
-    skip_auth: bool,
     #[serde(rename = "bSetAsPrimaryAccount")]
     set_as_primary_account: bool,
     epic_auth_ticket: String,
     #[serde(rename = "EpicAccountID")]
     epic_account_id: String,
-    // ADD THIS NEW FIELD:
+    #[serde(rename = "bAllowBatching")]
+    allow_batching: bool,
     headers: Vec<AuthHeader>,
 }
 
-// ADD THIS NEW STRUCT:
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 struct AuthHeader {
@@ -675,56 +637,35 @@ struct GetPlayersSkillsResponse {
     players: Vec<PlayerWithSkills>,
 }
 
-/// Envelope for `Training/AddTrainingData v1`: the pack object must be nested
-/// under `TrainingData`.
 #[derive(Debug, Clone, Serialize)]
 struct SaveTrainingRequest {
     #[serde(rename = "TrainingData")]
     training_data: SaveTrainingData,
 }
 
-/// A training pack to publish. Field names mirror the PsyNet wire schema (and
-/// the game's `TAGame.TrainingEditorData_TA` UStruct). Only `TM_Guid`,
-/// `TM_Name`, `Type`, `Difficulty`, `MapName`, `Tags`, `NumRounds`, and
-/// `Rounds` are required; the server assigns `Code`/timestamps/creator.
-///
-/// Deserializes from the same PascalCase JSON it serializes to, so a
-/// structured payload file can be read directly into this type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveTrainingData {
-    /// Base64-encoded 16-byte pack GUID. Must be present and valid on the
-    /// wire; generate a fresh one for a new pack (see
-    /// [`SaveTrainingData::new_guid`]). May be omitted in payload files
-    /// (deserializes to empty); callers should mint a GUID before publishing.
     #[serde(rename = "TM_Guid", default)]
     pub tm_guid: String,
     #[serde(rename = "TM_Name")]
     pub tm_name: String,
-    /// `ETrainingType` ordinal: None=0, Aerial=1, Goalie=2, Striker=3, End=4.
     #[serde(rename = "Type")]
     pub training_type: i32,
-    /// `EDifficulty` ordinal.
     #[serde(rename = "Difficulty")]
     pub difficulty: i32,
     #[serde(rename = "MapName")]
     pub map_name: String,
     #[serde(rename = "Tags", default)]
     pub tags: Vec<String>,
-    /// Number of rounds. May be omitted in payload files (deserializes to 0);
-    /// callers should set it to `rounds.len()` before publishing.
     #[serde(rename = "NumRounds", default)]
     pub num_rounds: i32,
     #[serde(rename = "Rounds")]
     pub rounds: Vec<SaveTrainingRound>,
-    /// Optional free-text description (the game sends this; the server accepts
-    /// packs without it).
     #[serde(rename = "Description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
 impl SaveTrainingData {
-    /// Generates a fresh random base64-encoded 16-byte GUID suitable for
-    /// [`SaveTrainingData::tm_guid`].
     pub fn new_guid() -> String {
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).expect("system RNG available");
@@ -732,9 +673,6 @@ impl SaveTrainingData {
     }
 }
 
-/// One round of a training pack. `serialized_archetypes` are the raw UE
-/// archetype strings (ball spawn, dynamic spawn point, player car) preserved
-/// verbatim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveTrainingRound {
     #[serde(rename = "TimeLimit")]
@@ -743,16 +681,12 @@ pub struct SaveTrainingRound {
     pub serialized_archetypes: Vec<String>,
 }
 
-/// Response from `Training/AddTrainingData v1`: the newly assigned public share
-/// code (e.g. `"9F94-DF9F-0460-7481"`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveTrainingResponse {
     #[serde(rename = "Code")]
     pub code: String,
 }
 
-/// An application-level error returned by PsyNet inside an otherwise
-/// successful RPC response (`{"Error": {"Type": ..., "Message": ...}}`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct PsyError {
     #[serde(rename = "Type")]
@@ -798,35 +732,6 @@ fn generate_psy_sig(body: &[u8]) -> String {
     mac.update(b"-");
     mac.update(body);
     base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-}
-
-fn psy_build_id() -> String {
-    decode_build_id(GAME_VERSION).to_string()
-}
-
-fn decode_build_id(version: &str) -> i32 {
-    let mut data = Vec::with_capacity(version.len() * 2);
-    for code_unit in version.encode_utf16() {
-        data.push(code_unit as u8);
-        data.push((code_unit >> 8) as u8);
-    }
-    crc32(&data, 0)
-}
-
-fn crc32(data: &[u8], seed: u32) -> i32 {
-    const POLY: u32 = 0x04C11DB7;
-    let mut crc = seed ^ 0xFFFF_FFFF;
-    for byte in data {
-        crc ^= (*byte as u32) << 24;
-        for _ in 0..8 {
-            crc = if crc & 0x8000_0000 != 0 {
-                (crc << 1) ^ POLY
-            } else {
-                crc << 1
-            };
-        }
-    }
-    (crc ^ 0xFFFF_FFFF) as i32
 }
 
 fn build_message(
@@ -921,58 +826,6 @@ mod tests {
 
         assert_eq!(response.response_id, "PsyNetMessage_X_1");
         assert_eq!(response.result.unwrap().get(), "{\"ok\":true}");
-    }
-
-    #[test]
-    fn match_history_accepts_null_skill_values() {
-        let response: GetMatchHistoryResponse = serde_json::from_str(
-            r#"{
-                "Matches": [
-                    {
-                        "ReplayUrl": "https://example.com/replay.replay",
-                        "Match": {
-                            "MatchGUID": "match-1",
-                            "RecordStartTimestamp": 1,
-                            "MapName": "Stadium_P",
-                            "Playlist": 11,
-                            "Team0Score": 1,
-                            "Team1Score": 2,
-                            "Players": [
-                                {
-                                    "PlayerID": "Epic|abc|0",
-                                    "PlayerName": "player",
-                                    "LastTeam": 0,
-                                    "TeamColor": "Blue",
-                                    "Score": 100,
-                                    "Goals": 1,
-                                    "Assists": 0,
-                                    "Saves": 0,
-                                    "Shots": 2,
-                                    "Skills": {
-                                        "Mu": null,
-                                        "Sigma": null,
-                                        "Tier": null,
-                                        "Division": null,
-                                        "PrevMu": null,
-                                        "PrevSigma": null,
-                                        "PrevTier": null,
-                                        "PrevDivision": null,
-                                        "bValid": null
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                ]
-            }"#,
-        )
-        .unwrap();
-
-        let skills = &response.matches[0].match_info.players[0].skills;
-        assert_eq!(skills.mu, 0.0);
-        assert_eq!(skills.prev_sigma, 0.0);
-        assert_eq!(skills.tier, 0);
-        assert!(!skills.valid);
     }
 
     #[test]

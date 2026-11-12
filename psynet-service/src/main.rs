@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-use psynet::{PlayerId, PlayerPlatform, PsyNetClient, PsyNetRpc};
+use psynet::{PlayerId, PlayerPlatform, PsyNetClient};
 
 #[derive(Clone)]
 struct AppState {
@@ -33,6 +33,39 @@ struct RankData {
     peak_tier: i32,
 }
 
+// --- Epic Games Token Exchange ---
+async fn get_epic_access_token(account_id: &str, device_id: &str, secret: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    
+    // Public launcher client credentials used for device auth
+    let client_id = "3446cd72694c4a4485d81b77adbb2141";
+    let client_secret = "98f2b4898a614a8c82e78b59f6a9119e";
+    
+    let params = [
+        ("grant_type", "device_auth"),
+        ("account_id", account_id),
+        ("device_id", device_id),
+        ("secret", secret),
+    ];
+
+    let res = client.post("https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token")
+        .basic_auth(client_id, Some(client_secret))
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if res.status().is_success() {
+        let json: serde_json::Value = res.json().await.map_err(|e| format!("JSON error: {}", e))?;
+        if let Some(token) = json.get("access_token").and_then(|t| t.as_str()) {
+            return Ok(token.to_string());
+        }
+    }
+    
+    Err(format!("Failed to get token: {:?}", res.text().await))
+}
+
+// --- Auth Check for your Frontend ---
 fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -44,10 +77,12 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCod
     Err(StatusCode::UNAUTHORIZED)
 }
 
+// --- Health Check Endpoint ---
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
+// --- Ranks Endpoint ---
 async fn get_ranks(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -92,12 +127,11 @@ async fn get_ranks(
                     if skill.playlist == 10 || skill.playlist == 11 || skill.playlist == 13 {
                         response_data.push(RankData {
                             playlist: skill.playlist.to_string(),
-                            mmr: skill.mmr.round() as i32, // Convert f64 to i32
-                            tier: skill.tier as i32,       // Convert i64 to i32
+                            mmr: skill.mmr.round() as i32, 
+                            tier: skill.tier as i32,       
                             division: skill.division.to_string(),
                             matches_played: skill.matches_played as i32,
-                            // Note: PsyNet does not provide total wins directly, so win_rate is calculated as 0.
-                            // Peak MMR and Peak Tier are not provided by this endpoint; we use current values.
+                            // Note: PsyNet does not provide total wins or peak MMR directly in this endpoint
                             win_rate: 0, 
                             win_streak: skill.win_streak as i32,
                             peak_mmr: skill.mmr.round() as i32,
@@ -116,30 +150,38 @@ async fn get_ranks(
     }
 }
 
+// --- Main Function ---
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let internal_api_token = std::env::var("INTERNAL_API_TOKEN")
-        .unwrap_or_else(|_| "default_token".to_string());
-    let epic_account_id = std::env::var("EPIC_ACCOUNT_ID")
-        .expect("EPIC_ACCOUNT_ID must be set");
-    let epic_access_token = std::env::var("EPIC_ACCESS_TOKEN")
-        .expect("EPIC_ACCESS_TOKEN must be set");
+    let internal_api_token = std::env::var("INTERNAL_API_TOKEN").unwrap_or_else(|_| "default_token".to_string());
+    
+    // Load the device auth credentials from Render Environment Variables
+    let epic_account_id = std::env::var("EPIC_ACCOUNT_ID").expect("EPIC_ACCOUNT_ID must be set");
+    let epic_device_id = std::env::var("EPIC_DEVICE_ID").expect("EPIC_DEVICE_ID must be set");
+    let epic_secret = std::env::var("EPIC_DEVICE_SECRET").expect("EPIC_DEVICE_SECRET must be set");
+
+    println!("Exchanging Device Auth for Access Token...");
+    let access_token = match get_epic_access_token(&epic_account_id, &epic_device_id, &epic_secret).await {
+        Ok(token) => token,
+        Err(e) => {
+            eprintln!("CRITICAL ERROR: {}", e);
+            std::process::exit(1);
+        }
+    };
+    println!("Successfully obtained Epic Access Token!");
 
     println!("Initializing PsyNet Client...");
-    
-    // PsyNetClient::new() is synchronous
     let psy_client = PsyNetClient::new();
-    
     println!("PsyNet Client initialized successfully!");
 
     let state = Arc::new(AppState {
         internal_api_token,
         psy_client,
         epic_account_id,
-        epic_access_token,
+        epic_access_token: access_token,
     });
 
     let cors = CorsLayer::new()

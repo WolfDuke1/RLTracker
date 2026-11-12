@@ -34,6 +34,7 @@ struct RankData {
 }
 
 // --- Epic Games Token Exchange ---
+// FIXED: Read the response as text first, so we can both parse it AND use it for errors.
 async fn get_epic_access_token(account_id: &str, device_id: &str, secret: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
     
@@ -54,14 +55,17 @@ async fn get_epic_access_token(account_id: &str, device_id: &str, secret: &str) 
         .await
         .map_err(|e| format!("Network error: {}", e))?;
 
-    if res.status().is_success() {
-        let json: serde_json::Value = res.json().await.map_err(|e| format!("JSON error: {}", e))?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("JSON error: {}", e))?;
         if let Some(token) = json.get("access_token").and_then(|t| t.as_str()) {
             return Ok(token.to_string());
         }
     }
     
-    Err(format!("Failed to get token: {:?}", res.text().await))
+    Err(format!("Failed to get token. Status: {}. Body: {}", status, text))
 }
 
 // --- Auth Check for your Frontend ---
@@ -87,26 +91,21 @@ async fn get_ranks(
     headers: HeaderMap,
     Path((platform, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    // 1. Verify your frontend's INTERNAL_API_TOKEN
     if let Err(status) = check_auth(&headers, &state.internal_api_token) {
         return (status, "Unauthorized").into_response();
     }
 
     println!("Fetching PsyNet data for: {} / {}", platform, id);
 
-    // 2. Map the platform string (Removed Switch variant)
+    // FIXED: Removed Psn and Xbl because the psynet crate does not support them.
     let player_platform = match platform.to_lowercase().as_str() {
         "epic" => PlayerPlatform::Epic,
         "steam" => PlayerPlatform::Steam,
-        "psn" => PlayerPlatform::Psn,
-        "xbl" => PlayerPlatform::Xbl,
-        _ => return (StatusCode::BAD_REQUEST, "Invalid platform").into_response(),
+        _ => return (StatusCode::BAD_REQUEST, "Invalid platform. Supported: epic, steam").into_response(),
     };
 
-    // 3. FIX: Added &id because PlayerId::new expects a &str, but `id` is a String
     let player_id = PlayerId::new(player_platform, &id);
 
-    // 4. Authenticate to create an RPC session
     let rpc = match state.psy_client.auth_player(&state.epic_account_id, &state.epic_access_token).await {
         Ok(rpc) => rpc,
         Err(e) => {
@@ -115,7 +114,6 @@ async fn get_ranks(
         }
     };
 
-    // 5. Fetch the skills and map the data
     match rpc.get_players_skills(vec![player_id]).await {
         Ok(players_with_skills) => {
             let mut response_data = Vec::new();
@@ -129,10 +127,10 @@ async fn get_ranks(
                             tier: skill.tier as i32,       
                             division: skill.division.to_string(),
                             matches_played: skill.matches_played as i32,
-                            win_rate: 0, 
+                            win_rate: 0, // Not provided by this endpoint
                             win_streak: skill.win_streak as i32,
-                            peak_mmr: skill.mmr.round() as i32,
-                            peak_tier: skill.tier as i32,
+                            peak_mmr: skill.mmr.round() as i32, // Using current MMR as peak
+                            peak_tier: skill.tier as i32,       // Using current tier as peak
                         });
                     }
                 }

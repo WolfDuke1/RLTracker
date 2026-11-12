@@ -10,13 +10,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-// Import the correct types from the psynet crate
-use psynet::{PsyNetClient, PsyNetRpc, PlayerId};
+use psynet::{PlayerId, PlayerPlatform, PsyNetClient, PsyNetRpc};
 
 #[derive(Clone)]
 struct AppState {
     internal_api_token: String,
     psy_client: PsyNetClient,
+    epic_account_id: String,
+    epic_access_token: String,
 }
 
 #[derive(Serialize)]
@@ -52,40 +53,55 @@ async fn get_ranks(
     headers: HeaderMap,
     Path((platform, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    // 1. Verify your frontend's INTERNAL_API_TOKEN
     if let Err(status) = check_auth(&headers, &state.internal_api_token) {
         return (status, "Unauthorized").into_response();
     }
 
-    println!("Fetching real PsyNet data for: {} / {}", platform, id);
+    println!("Fetching PsyNet data for: {} / {}", platform, id);
 
-    // Create the PlayerId required by the API
-    let player_id = PlayerId {
-        platform: platform,
-        id: id,
+    // 2. Map the platform string to the PlayerPlatform enum
+    let player_platform = match platform.to_lowercase().as_str() {
+        "epic" => PlayerPlatform::Epic,
+        "steam" => PlayerPlatform::Steam,
+        "psn" => PlayerPlatform::Psn,
+        "xbl" => PlayerPlatform::Xbl,
+        "switch" => PlayerPlatform::Switch,
+        _ => return (StatusCode::BAD_REQUEST, "Invalid platform").into_response(),
     };
 
-    // Use the correct RPC method: get_players_skills
-    match state.psy_client.get_players_skills(vec![player_id]).await {
+    let player_id = PlayerId::new(player_platform, id);
+
+    // 3. Authenticate to create an RPC session
+    let rpc = match state.psy_client.auth_player(&state.epic_account_id, &state.epic_access_token).await {
+        Ok(rpc) => rpc,
+        Err(e) => {
+            println!("PsyNet Authentication failed: {:?}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "PsyNet authentication failed").into_response();
+        }
+    };
+
+    // 4. Fetch the skills and map the data
+    match rpc.get_players_skills(vec![player_id]).await {
         Ok(players_with_skills) => {
             let mut response_data = Vec::new();
 
             if let Some(player) = players_with_skills.first() {
                 for skill in &player.skills {
-                    if skill.playlist_id == 10 || skill.playlist_id == 11 || skill.playlist_id == 13 {
+                    // Filter for Ranked 1v1 (10), 2v2 (11), 3v3 (13)
+                    if skill.playlist == 10 || skill.playlist == 11 || skill.playlist == 13 {
                         response_data.push(RankData {
-                            playlist: skill.playlist_id.to_string(),
-                            mmr: skill.mmr,
-                            tier: skill.tier,
+                            playlist: skill.playlist.to_string(),
+                            mmr: skill.mmr.round() as i32, // Convert f64 to i32
+                            tier: skill.tier as i32,       // Convert i64 to i32
                             division: skill.division.to_string(),
-                            matches_played: skill.matches_played,
-                            win_rate: if skill.matches_played > 0 {
-                                ((skill.wins as f32 / skill.matches_played as f32) * 100.0) as i32
-                            } else {
-                                0
-                            },
-                            win_streak: skill.win_streak,
-                            peak_mmr: skill.peak_mmr,
-                            peak_tier: skill.peak_tier,
+                            matches_played: skill.matches_played as i32,
+                            // Note: PsyNet does not provide total wins directly, so win_rate is calculated as 0.
+                            // Peak MMR and Peak Tier are not provided by this endpoint; we use current values.
+                            win_rate: 0, 
+                            win_streak: skill.win_streak as i32,
+                            peak_mmr: skill.mmr.round() as i32,
+                            peak_tier: skill.tier as i32,
                         });
                     }
                 }
@@ -107,17 +123,23 @@ async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let internal_api_token = std::env::var("INTERNAL_API_TOKEN")
         .unwrap_or_else(|_| "default_token".to_string());
+    let epic_account_id = std::env::var("EPIC_ACCOUNT_ID")
+        .expect("EPIC_ACCOUNT_ID must be set");
+    let epic_access_token = std::env::var("EPIC_ACCESS_TOKEN")
+        .expect("EPIC_ACCESS_TOKEN must be set");
 
     println!("Initializing PsyNet Client...");
     
-    // Initialize the client (this reads your Epic credentials from the environment)
-    let psy_client = PsyNetClient::new().await.expect("Failed to initialize PsyNet. Check your Epic environment variables.");
+    // PsyNetClient::new() is synchronous
+    let psy_client = PsyNetClient::new();
     
     println!("PsyNet Client initialized successfully!");
 
     let state = Arc::new(AppState {
         internal_api_token,
         psy_client,
+        epic_account_id,
+        epic_access_token,
     });
 
     let cors = CorsLayer::new()

@@ -34,12 +34,12 @@ struct RankData {
 }
 
 // --- Epic Games Token Exchange ---
-// FIXED: Read the response as text first, so we can both parse it AND use it for errors.
 async fn get_epic_access_token(account_id: &str, device_id: &str, secret: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
     
-    let client_id = "3446cd72694c4a4485d81b77adbb2141";
-    let client_secret = "98f2b4898a614a8c82e78b59f6a9119e";
+    // UPDATED: Using the Android game client which is currently active
+    let client_id = "3f69e56c7649492c8cc29f1af08a8a12";
+    let client_secret = "b51ee9cb12234f50a69efa67ef53812e";
     
     let params = [
         ("grant_type", "device_auth"),
@@ -97,7 +97,7 @@ async fn get_ranks(
 
     println!("Fetching PsyNet data for: {} / {}", platform, id);
 
-    // FIXED: Removed Psn and Xbl because the psynet crate does not support them.
+    // Only Epic and Steam are supported by the psynet crate
     let player_platform = match platform.to_lowercase().as_str() {
         "epic" => PlayerPlatform::Epic,
         "steam" => PlayerPlatform::Steam,
@@ -127,10 +127,10 @@ async fn get_ranks(
                             tier: skill.tier as i32,       
                             division: skill.division.to_string(),
                             matches_played: skill.matches_played as i32,
-                            win_rate: 0, // Not provided by this endpoint
+                            win_rate: 0, 
                             win_streak: skill.win_streak as i32,
-                            peak_mmr: skill.mmr.round() as i32, // Using current MMR as peak
-                            peak_tier: skill.tier as i32,       // Using current tier as peak
+                            peak_mmr: skill.mmr.round() as i32, 
+                            peak_tier: skill.tier as i32,       
                         });
                     }
                 }

@@ -109,8 +109,8 @@ async fn get_ranks(
     let rpc = match state.psy_client.auth_player(&state.epic_account_id, &state.epic_access_token).await {
         Ok(rpc) => rpc,
         Err(e) => {
-            println!("PsyNet Authentication failed: {:?}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "PsyNet authentication failed").into_response();
+            eprintln!("PsyNet Auth Error: {:#}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("PsyNet auth failed: {}", e)).into_response();
         }
     };
 

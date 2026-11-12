@@ -11,7 +11,4 @@ serde_json = "1.0"
 tower-http = { version = "0.5.0", features = ["cors"] }
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json"] }
-psynet = "0.1.37"
-
-[patch.crates-io]
-psynet = { git = "https://github.com/PsyNetDev/psynet-rust.git", branch = "main" }
+psynet = { path = "vendor/psynet-0.1.37" }

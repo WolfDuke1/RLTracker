@@ -37,7 +37,6 @@ struct RankData {
 async fn get_epic_access_token(account_id: &str, device_id: &str, secret: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
     
-    // Public launcher client credentials used for device auth
     let client_id = "3446cd72694c4a4485d81b77adbb2141";
     let client_secret = "98f2b4898a614a8c82e78b59f6a9119e";
     
@@ -95,19 +94,19 @@ async fn get_ranks(
 
     println!("Fetching PsyNet data for: {} / {}", platform, id);
 
-    // 2. Map the platform string to the PlayerPlatform enum
+    // 2. Map the platform string (Removed Switch variant)
     let player_platform = match platform.to_lowercase().as_str() {
         "epic" => PlayerPlatform::Epic,
         "steam" => PlayerPlatform::Steam,
         "psn" => PlayerPlatform::Psn,
         "xbl" => PlayerPlatform::Xbl,
-        "switch" => PlayerPlatform::Switch,
         _ => return (StatusCode::BAD_REQUEST, "Invalid platform").into_response(),
     };
 
-    let player_id = PlayerId::new(player_platform, id);
+    // 3. FIX: Added &id because PlayerId::new expects a &str, but `id` is a String
+    let player_id = PlayerId::new(player_platform, &id);
 
-    // 3. Authenticate to create an RPC session
+    // 4. Authenticate to create an RPC session
     let rpc = match state.psy_client.auth_player(&state.epic_account_id, &state.epic_access_token).await {
         Ok(rpc) => rpc,
         Err(e) => {
@@ -116,14 +115,13 @@ async fn get_ranks(
         }
     };
 
-    // 4. Fetch the skills and map the data
+    // 5. Fetch the skills and map the data
     match rpc.get_players_skills(vec![player_id]).await {
         Ok(players_with_skills) => {
             let mut response_data = Vec::new();
 
             if let Some(player) = players_with_skills.first() {
                 for skill in &player.skills {
-                    // Filter for Ranked 1v1 (10), 2v2 (11), 3v3 (13)
                     if skill.playlist == 10 || skill.playlist == 11 || skill.playlist == 13 {
                         response_data.push(RankData {
                             playlist: skill.playlist.to_string(),
@@ -131,7 +129,6 @@ async fn get_ranks(
                             tier: skill.tier as i32,       
                             division: skill.division.to_string(),
                             matches_played: skill.matches_played as i32,
-                            // Note: PsyNet does not provide total wins or peak MMR directly in this endpoint
                             win_rate: 0, 
                             win_streak: skill.win_streak as i32,
                             peak_mmr: skill.mmr.round() as i32,
@@ -158,7 +155,6 @@ async fn main() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let internal_api_token = std::env::var("INTERNAL_API_TOKEN").unwrap_or_else(|_| "default_token".to_string());
     
-    // Load the device auth credentials from Render Environment Variables
     let epic_account_id = std::env::var("EPIC_ACCOUNT_ID").expect("EPIC_ACCOUNT_ID must be set");
     let epic_device_id = std::env::var("EPIC_DEVICE_ID").expect("EPIC_DEVICE_ID must be set");
     let epic_secret = std::env::var("EPIC_DEVICE_SECRET").expect("EPIC_DEVICE_SECRET must be set");

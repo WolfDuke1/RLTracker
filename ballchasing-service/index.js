@@ -1,18 +1,27 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const fetch =
+  globalThis.fetch ||
+  ((...args) => import('node-fetch').then(({ default: f }) => f(...args)));
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
 const app = express();
 app.use(cors());
+app.options('*', cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
-const MONGODB_URI = process.env.MONGODB_URI;
-const PSYNET_SERVICE_URL = (process.env.PSYNET_SERVICE_URL || 'https://rltracker-g6d7.onrender.com').replace(/\/+$/, '');
-const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || 'default_token';
+const MONGODB_URI = (process.env.MONGODB_URI || '').trim();
+const PSYNET_SERVICE_URL = (
+  process.env.PSYNET_SERVICE_URL || 'https://rltracker-g6d7.onrender.com'
+)
+  .trim()
+  .replace(/\/+$/, '');
+const INTERNAL_API_TOKEN = (
+  process.env.INTERNAL_API_TOKEN || 'default_token'
+).trim();
 
 if (!MONGODB_URI) {
   console.error('FATAL ERROR: MONGODB_URI is missing.');
@@ -71,7 +80,9 @@ const MmrSnapshot = mongoose.model('MmrSnapshot', mmrSnapshotSchema);
 // --- API USAGE TRACKER ---
 let apiCallsSinceLastSync = 0;
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') && !req.path.includes('/admin/')) apiCallsSinceLastSync++;
+  if (req.path.startsWith('/api/') && !req.path.includes('/admin/')) {
+    apiCallsSinceLastSync++;
+  }
   next();
 });
 setInterval(async () => {
@@ -121,15 +132,28 @@ app.post('/api/auth/login', async (req, res) => {
 
 // --- PSYNET RANKS PROXY + MMR HISTORY RECORDER ---
 const cache = new Map();
+const epicIdCache = new Map();
 const CACHE_TTL = 2 * 60 * 1000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 async function resolveSteamIdIfNeeded(id) {
   const trimmed = String(id).trim();
   if (/^\d{17}$/.test(trimmed)) return trimmed;
   if (!process.env.STEAM_API_KEY) return trimmed;
   try {
-    const r = await fetch(
-      `https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key=${process.env.STEAM_API_KEY}&vanityurl=${encodeURIComponent(trimmed)}`
+    const r = await fetchWithTimeout(
+      `https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key=${process.env.STEAM_API_KEY}&vanityurl=${encodeURIComponent(trimmed)}`,
+      {},
+      10000
     );
     const data = await r.json();
     if (data?.response?.success === 1 && data.response.steamid) {
@@ -142,7 +166,8 @@ async function resolveSteamIdIfNeeded(id) {
 app.get('/api/ranks/:platform/:id', async (req, res) => {
   const platform = req.params.platform.toLowerCase();
   const rawId = req.params.id.trim();
-  const resolvedId = platform === 'steam' ? await resolveSteamIdIfNeeded(rawId) : rawId;
+  const resolvedId =
+    platform === 'steam' ? await resolveSteamIdIfNeeded(rawId) : rawId;
   const playerKey = resolvedId.toLowerCase();
   const cacheKey = `ranks:${platform}:${playerKey}`;
 
@@ -152,14 +177,15 @@ app.get('/api/ranks/:platform/:id', async (req, res) => {
   }
 
   try {
-    const upstream = await fetch(
+    const upstream = await fetchWithTimeout(
       `${PSYNET_SERVICE_URL}/v1/ranks/${encodeURIComponent(platform)}/${encodeURIComponent(resolvedId)}`,
       {
         headers: {
           Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
           Accept: 'application/json',
         },
-      }
+      },
+      28000
     );
 
     const text = await upstream.text();
@@ -173,16 +199,26 @@ app.get('/api/ranks/:platform/:id', async (req, res) => {
 
     if (platform === 'epic' && ranks[0]?.account_id) {
       epicIdCache.set(playerKey, ranks[0].account_id);
+      epicIdCache.set(ranks[0].account_id.toLowerCase(), ranks[0].account_id);
     }
 
-    // Record MMR snapshot in MongoDB & compute true tracked Peak MMR
+    const storageKey =
+      platform === 'epic' && ranks[0]?.account_id
+        ? ranks[0].account_id.toLowerCase()
+        : playerKey;
+
     for (const r of ranks) {
       const pl = String(r.playlist);
       const currentMmr = Number(r.mmr) || 0;
       if (currentMmr <= 0) continue;
 
       try {
-        const latest = await MmrSnapshot.findOne({ platform, playerKey, playlist: pl }).sort({ timestamp: -1 });
+        const latest = await MmrSnapshot.findOne({
+          platform,
+          playerKey: storageKey,
+          playlist: pl,
+        }).sort({ timestamp: -1 });
+
         const shouldInsert =
           !latest ||
           latest.mmr !== currentMmr ||
@@ -191,14 +227,19 @@ app.get('/api/ranks/:platform/:id', async (req, res) => {
         if (shouldInsert) {
           await MmrSnapshot.create({
             platform,
-            playerKey,
+            playerKey: storageKey,
             playlist: pl,
             mmr: currentMmr,
             tier: Number(r.tier) || 0,
           });
         }
 
-        const peakDoc = await MmrSnapshot.findOne({ platform, playerKey, playlist: pl }).sort({ mmr: -1 });
+        const peakDoc = await MmrSnapshot.findOne({
+          platform,
+          playerKey: storageKey,
+          playlist: pl,
+        }).sort({ mmr: -1 });
+
         if (peakDoc && peakDoc.mmr > currentMmr) {
           r.peak_mmr = peakDoc.mmr;
           r.peak_tier = peakDoc.tier || r.tier;
@@ -210,15 +251,20 @@ app.get('/api/ranks/:platform/:id', async (req, res) => {
     res.json(ranks);
   } catch (err) {
     console.error('Ranks proxy error:', err);
-    res.status(502).json({ error: `Failed to reach PsyNet service: ${err.message}` });
+    res.status(502).json({
+      error: `Failed to reach PsyNet service: ${err.message}`,
+    });
   }
 });
 
 app.get('/api/player/:platform/:id/mmr-history', async (req, res) => {
   const platform = req.params.platform.toLowerCase();
   const rawId = req.params.id.trim();
-  const resolvedId = platform === 'steam' ? await resolveSteamIdIfNeeded(rawId) : rawId;
-  const playerKey = resolvedId.toLowerCase();
+  const resolvedId =
+    platform === 'steam' ? await resolveSteamIdIfNeeded(rawId) : rawId;
+  const cachedEpic =
+    platform === 'epic' ? epicIdCache.get(resolvedId.toLowerCase()) : null;
+  const playerKey = (cachedEpic || resolvedId).toLowerCase();
   const playlist = String(req.query.playlist || '11');
   const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -243,34 +289,42 @@ app.get('/api/player/:platform/:id/mmr-history', async (req, res) => {
 // --- BALLCHASING API ---
 const REPLAY_CACHE_TTL = 5 * 60 * 1000;
 app.get('/api/player/:platform/:id/replays', async (req, res) => {
-  const { platform, id } = req.params;
-  const playerId = `${platform}:${lookupId}`;
-  const cacheKey = `replays:${playerId}`;
+  const platform = req.params.platform.toLowerCase();
+  const rawId = req.params.id.trim();
+  const resolvedEpicId =
+    platform === 'epic' ? epicIdCache.get(rawId.toLowerCase()) : null;
+  const lookupId = resolvedEpicId || rawId;
+  const cacheKey = `replays:${platform}:${lookupId.toLowerCase()}`;
+
   const cached = cache.get(cacheKey);
-  const lookupId = (platform.toLowerCase() === 'epic' && epicIdCache.get(id.toLowerCase())) || id;
-  if (cached && Date.now() - cached.timestamp < REPLAY_CACHE_TTL) return res.json(cached.data);
+  if (cached && Date.now() - cached.timestamp < REPLAY_CACHE_TTL) {
+    return res.json(cached.data);
+  }
 
   try {
-    let response = await fetch(
-      `https://ballchasing.com/api/replays?player-id=${encodeURIComponent(playerId)}&count=20`,
-      {
-        headers: { Authorization: process.env.BALLCHASING_API_KEY, Accept: 'application/json' },
-      }
-    );
-    if (!response.ok) throw new Error(`Ballchasing API error: ${response.status}`);
-    let data = await response.json();
+    const headers = {
+      Authorization: process.env.BALLCHASING_API_KEY,
+      Accept: 'application/json',
+    };
 
-    // Fallback to player-name search if player-id yields no replays (common for Epic display names)
-    if ((!data.list || data.list.length === 0) && id) {
-      const byNameRes = await fetch(
-        `https://ballchasing.com/api/replays?player-name=${encodeURIComponent(id)}&count=20`,
-        {
-          headers: { Authorization: process.env.BALLCHASING_API_KEY, Accept: 'application/json' },
-        }
+    let data = { list: [] };
+
+    // 1. Try player-id with resolved ID (32-char Epic ID or SteamID64)
+    const r1 = await fetchWithTimeout(
+      `https://ballchasing.com/api/replays?player-id=${encodeURIComponent(`${platform}:${lookupId}`)}&count=20`,
+      { headers },
+      15000
+    );
+    if (r1.ok) data = await r1.json();
+
+    // 2. Fallback to player-name search if player-id returned empty
+    if (!data.list || data.list.length === 0) {
+      const r2 = await fetchWithTimeout(
+        `https://ballchasing.com/api/replays?player-name=${encodeURIComponent(rawId)}&count=20`,
+        { headers },
+        15000
       );
-      if (byNameRes.ok) {
-        data = await byNameRes.json();
-      }
+      if (r2.ok) data = await r2.json();
     }
 
     const normalized = (data.list || []).map((r) => ({
@@ -297,31 +351,58 @@ app.get('/api/player/:platform/:id/replays', async (req, res) => {
         },
       })),
     }));
+
     cache.set(cacheKey, { data: normalized, timestamp: Date.now() });
     res.json(normalized);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch replay data' });
+    console.error('Ballchasing replays error:', err);
+    res.status(500).json({ error: `Failed to fetch replay data: ${err.message}` });
   }
 });
 
 app.get('/api/leaderboard', async (req, res) => {
-  res.json([
-    { name: 'Mawkzy', mmr: 1950, wins: 150, losses: 50 },
-    { name: 'Zen', mmr: 2100, wins: 200, losses: 40 },
-    { name: 'Rise', mmr: 1800, wins: 120, losses: 60 },
-  ]);
+  const playlist = String(req.query.playlist || '11');
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
+
+  const presets = {
+    10: [
+      { name: 'Mawkzy', mmr: 1840, wins: 192, losses: 54 },
+      { name: 'Rw9', mmr: 1815, wins: 175, losses: 49 },
+      { name: 'ApparentlyJack', mmr: 1780, wins: 164, losses: 58 },
+    ],
+    11: [
+      { name: 'zenrl', mmr: 2658, wins: 310, losses: 62 },
+      { name: 'Vatira', mmr: 2590, wins: 288, losses: 71 },
+      { name: 'dralii', mmr: 2564, wins: 274, losses: 69 },
+    ],
+    13: [
+      { name: 'GGM1 JUSTIN.', mmr: 2070, wins: 215, losses: 64 },
+      { name: 'trk511', mmr: 2045, wins: 198, losses: 59 },
+      { name: 'BeastMode', mmr: 2022, wins: 190, losses: 61 },
+    ],
+  };
+
+  const rows = presets[playlist] || presets['11'];
+  res.json(rows.slice(0, limit));
 });
 
 // --- STEAM API ---
 let steamCache = { count: null, timestamp: 0 };
 app.get('/api/steam-count', async (req, res) => {
   try {
-    if (Date.now() - steamCache.timestamp < 300000) return res.json({ count: steamCache.count });
-    const response = await fetch(
-      'https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=252950'
+    if (Date.now() - steamCache.timestamp < 300000) {
+      return res.json({ count: steamCache.count });
+    }
+    const response = await fetchWithTimeout(
+      'https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=252950',
+      {},
+      10000
     );
     const data = await response.json();
-    steamCache = { count: data.response?.player_count || null, timestamp: Date.now() };
+    steamCache = {
+      count: data.response?.player_count || null,
+      timestamp: Date.now(),
+    };
     res.json({ count: steamCache.count });
   } catch (error) {
     res.status(500).json({ count: null });
@@ -339,7 +420,10 @@ app.post('/api/favorites/toggle', async (req, res) => {
         { upsert: true }
       );
     } else {
-      await Favorite.findOneAndUpdate({ playerName: name, platform }, { $inc: { count: -1 } });
+      await Favorite.findOneAndUpdate(
+        { playerName: name, platform },
+        { $inc: { count: -1 } }
+      );
     }
     res.json({ success: true });
   } catch (e) {
@@ -370,10 +454,11 @@ app.get('/api/news', async (req, res) => {
 // --- ADMIN DASHBOARD ROUTES (Protected) ---
 app.post('/api/settings', verifyToken, async (req, res) => {
   try {
-    const newSettings = await Settings.findByIdAndUpdate('global_settings', req.body, {
-      new: true,
-      upsert: true,
-    });
+    const newSettings = await Settings.findByIdAndUpdate(
+      'global_settings',
+      req.body,
+      { new: true, upsert: true }
+    );
     await logAction('Updated global settings');
     res.json({ success: true, settings: newSettings });
   } catch (e) {
@@ -385,7 +470,10 @@ app.get('/api/admin/backup', verifyToken, async (req, res) => {
   try {
     const settings = await Settings.findById('global_settings');
     await logAction('Downloaded database backup');
-    res.setHeader('Content-Disposition', 'attachment; filename="rl_settings_backup.json"');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="rl_settings_backup.json"'
+    );
     res.setHeader('Content-Type', 'application/json');
     res.send(JSON.stringify(settings, null, 2));
   } catch (e) {
@@ -423,7 +511,9 @@ app.post('/api/admin/news', verifyToken, async (req, res) => {
 
 app.put('/api/admin/news/:id', verifyToken, async (req, res) => {
   try {
-    const post = await News.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const post = await News.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    });
     await logAction(`Edited news post: ${post.title}`);
     res.json({ success: true, post });
   } catch (e) {

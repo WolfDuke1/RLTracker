@@ -40,6 +40,7 @@ struct RankData {
     win_streak: i32,
     peak_mmr: i32,
     peak_tier: i32,
+    account_id: String,
 }
 
 // --- Epic Games Token Exchange ---
@@ -118,51 +119,123 @@ async fn resolve_epic_account_id(
         return Ok(trimmed.to_lowercase());
     }
 
-    let mut url = reqwest::Url::parse(
+    let mut last_diag = String::new();
+
+    // 1. Epic User Search Service (used by Rocket League game clients)
+    if let Ok(mut search_url) = reqwest::Url::parse(&format!(
+        "https://user-search-service-prod.ol.epicgames.com/api/v1/search/{}",
+        state.epic_account_id
+    )) {
+        search_url
+            .query_pairs_mut()
+            .append_pair("prefix", trimmed);
+
+        if let Ok(res) = state
+            .http_client
+            .get(search_url)
+            .bearer_auth(token)
+            .send()
+            .await
+        {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            if status.is_success() {
+                if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                    // Prefer exact case-insensitive match on matched display name
+                    for entry in &arr {
+                        let exact = entry
+                            .get("matches")
+                            .and_then(|m| m.as_array())
+                            .map(|list| {
+                                list.iter().any(|item| {
+                                    item.get("value")
+                                        .and_then(|v| v.as_str())
+                                        .map(|val| val.eq_ignore_ascii_case(trimmed))
+                                        .unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false);
+
+                        if exact {
+                            if let Some(acc_id) = entry.get("accountId").and_then(|v| v.as_str()) {
+                                return Ok(acc_id.to_string());
+                            }
+                        }
+                    }
+                    // Otherwise take the top search hit if one exists
+                    if let Some(acc_id) = arr
+                        .first()
+                        .and_then(|e| e.get("accountId"))
+                        .and_then(|v| v.as_str())
+                    {
+                        return Ok(acc_id.to_string());
+                    }
+                }
+            }
+            last_diag = format!("search({})", status);
+        }
+    }
+
+    // 2. Fallback: Account Public Service bulk displayName query
+    if let Ok(mut bulk_url) = reqwest::Url::parse(
+        "https://account-public-service-prod.ol.epicgames.com/account/api/public/account",
+    ) {
+        bulk_url
+            .query_pairs_mut()
+            .append_pair("displayName", trimmed);
+
+        if let Ok(res) = state
+            .http_client
+            .get(bulk_url)
+            .bearer_auth(token)
+            .send()
+            .await
+        {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            if status.is_success() {
+                if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                    if let Some(acc_id) = arr
+                        .first()
+                        .and_then(|e| e.get("id"))
+                        .and_then(|v| v.as_str())
+                    {
+                        return Ok(acc_id.to_string());
+                    }
+                }
+            }
+            last_diag = format!("{} | bulk({})", last_diag, status);
+        }
+    }
+
+    // 3. Fallback: Account Public Service exact displayName path
+    for host in [
         "https://account-public-service-prod.ol.epicgames.com/account/api/public/account/displayName/",
-    )
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    url.path_segments_mut()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Invalid Epic lookup URL".to_string()))?
-        .push(trimmed);
-
-    let res = state
-        .http_client
-        .get(url)
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Epic lookup network error: {}", e)))?;
-
-    if res.status() == StatusCode::NOT_FOUND {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("Epic display name '{}' not found", trimmed),
-        ));
+        "https://account-public-service-prod03.ol.epicgames.com/account/api/public/account/displayName/",
+    ] {
+        if let Ok(mut url) = reqwest::Url::parse(host) {
+            if let Ok(mut segs) = url.path_segments_mut() {
+                segs.push(trimmed);
+            }
+            if let Ok(res) = state.http_client.get(url).bearer_auth(token).send().await {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                if status.is_success() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(acc_id) = json.get("id").and_then(|v| v.as_str()) {
+                            return Ok(acc_id.to_string());
+                        }
+                    }
+                }
+                last_diag = format!("{} | path({})", last_diag, status);
+            }
+        }
     }
 
-    let status = res.status();
-    let text = res.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            format!("Epic lookup failed ({}): {}", status, text),
-        ));
-    }
-
-    let json: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Invalid Epic JSON: {}", e)))?;
-
-    json.get("id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                format!("No Epic Account ID returned for '{}'", trimmed),
-            )
-        })
+    Err((
+        StatusCode::NOT_FOUND,
+        format!("Epic player '{}' not found ({})", trimmed, last_diag),
+    ))
 }
 
 // --- Auth Check ---
@@ -266,6 +339,7 @@ async fn get_ranks(
                         win_streak: skill.win_streak as i32,
                         peak_mmr: mmr_rounded,
                         peak_tier: skill.tier as i32,
+                        account_id: resolved_id.clone(),
                     });
                 }
             }

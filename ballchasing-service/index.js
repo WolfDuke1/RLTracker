@@ -171,6 +171,10 @@ app.get('/api/ranks/:platform/:id', async (req, res) => {
 
     const ranks = JSON.parse(text);
 
+    if (platform === 'epic' && ranks[0]?.account_id) {
+      epicIdCache.set(playerKey, ranks[0].account_id);
+    }
+
     // Record MMR snapshot in MongoDB & compute true tracked Peak MMR
     for (const r of ranks) {
       const pl = String(r.playlist);
@@ -240,9 +244,10 @@ app.get('/api/player/:platform/:id/mmr-history', async (req, res) => {
 const REPLAY_CACHE_TTL = 5 * 60 * 1000;
 app.get('/api/player/:platform/:id/replays', async (req, res) => {
   const { platform, id } = req.params;
-  const playerId = `${platform}:${id}`;
+  const playerId = `${platform}:${lookupId}`;
   const cacheKey = `replays:${playerId}`;
   const cached = cache.get(cacheKey);
+  const lookupId = (platform.toLowerCase() === 'epic' && epicIdCache.get(id.toLowerCase())) || id;
   if (cached && Date.now() - cached.timestamp < REPLAY_CACHE_TTL) return res.json(cached.data);
 
   try {

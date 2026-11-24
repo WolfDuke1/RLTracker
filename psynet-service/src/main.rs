@@ -141,7 +141,6 @@ async fn resolve_epic_account_id(
             let text = res.text().await.unwrap_or_default();
             if status.is_success() {
                 if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
-                    // Prefer exact case-insensitive match on matched display name
                     for entry in &arr {
                         let exact = entry
                             .get("matches")
@@ -162,7 +161,6 @@ async fn resolve_epic_account_id(
                             }
                         }
                     }
-                    // Otherwise take the top search hit if one exists
                     if let Some(acc_id) = arr
                         .first()
                         .and_then(|e| e.get("accountId"))
@@ -238,7 +236,6 @@ async fn resolve_epic_account_id(
     ))
 }
 
-// --- Auth Check ---
 fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -250,21 +247,15 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCod
     Err(StatusCode::UNAUTHORIZED)
 }
 
-// --- Health Check Endpoint ---
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
-// --- Ranks Endpoint ---
-async fn get_ranks(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path((platform, id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.internal_api_token) {
-        return (status, "Unauthorized").into_response();
-    }
-
+async fn query_psynet_ranks(
+    state: &AppState,
+    platform: &str,
+    id: &str,
+) -> axum::response::Response {
     println!("Fetching PsyNet data for: {} / {}", platform, id);
 
     let player_platform = match platform.to_lowercase().as_str() {
@@ -279,13 +270,13 @@ async fn get_ranks(
         }
     };
 
-    let mut token = match get_valid_epic_token(&state, false).await {
+    let mut token = match get_valid_epic_token(state, false).await {
         Ok(t) => t,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
 
     let resolved_id = if matches!(player_platform, PlayerPlatform::Epic) {
-        match resolve_epic_account_id(&state, &token, &id).await {
+        match resolve_epic_account_id(state, &token, id).await {
             Ok(acc_id) => acc_id,
             Err((code, msg)) => return (code, msg).into_response(),
         }
@@ -299,7 +290,7 @@ async fn get_ranks(
         .await;
 
     if rpc_res.is_err() {
-        if let Ok(refreshed) = get_valid_epic_token(&state, true).await {
+        if let Ok(refreshed) = get_valid_epic_token(state, true).await {
             token = refreshed;
             rpc_res = state
                 .psy_client
@@ -357,22 +348,56 @@ async fn get_ranks(
     }
 }
 
-// --- Main Function ---
+// Protected internal route used by ballchasing-service proxy
+async fn get_ranks_v1(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((platform, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(status) = check_auth(&headers, &state.internal_api_token) {
+        return (status, "Unauthorized").into_response();
+    }
+    query_psynet_ranks(&state, &platform, &id).await
+}
+
+// Public fallback route used if ballchasing-service is sleeping/redeploying
+async fn get_ranks_public(
+    State(state): State<Arc<AppState>>,
+    Path((platform, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    query_psynet_ranks(&state, &platform, &id).await
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let internal_api_token =
-        std::env::var("INTERNAL_API_TOKEN").unwrap_or_else(|_| "default_token".to_string());
+    let port = std::env::var("PORT")
+        .unwrap_or_else(|_| "8080".to_string())
+        .trim()
+        .to_string();
+    let internal_api_token = std::env::var("INTERNAL_API_TOKEN")
+        .unwrap_or_else(|_| "default_token".to_string())
+        .trim()
+        .to_string();
 
-    let epic_account_id =
-        std::env::var("EPIC_ACCOUNT_ID").expect("EPIC_ACCOUNT_ID must be set");
-    let epic_device_id = std::env::var("EPIC_DEVICE_ID").expect("EPIC_DEVICE_ID must be set");
-    let epic_device_secret =
-        std::env::var("EPIC_DEVICE_SECRET").expect("EPIC_DEVICE_SECRET must be set");
+    let epic_account_id = std::env::var("EPIC_ACCOUNT_ID")
+        .expect("EPIC_ACCOUNT_ID must be set")
+        .trim()
+        .to_string();
+    let epic_device_id = std::env::var("EPIC_DEVICE_ID")
+        .expect("EPIC_DEVICE_ID must be set")
+        .trim()
+        .to_string();
+    let epic_device_secret = std::env::var("EPIC_DEVICE_SECRET")
+        .expect("EPIC_DEVICE_SECRET must be set")
+        .trim()
+        .to_string();
 
-    let http_client = reqwest::Client::new();
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap();
 
     println!("Exchanging Device Auth for Access Token...");
     let access_token = match fetch_epic_access_token(
@@ -413,8 +438,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .route("/v1/ranks/:platform/:id", get(get_ranks))
-        .route("/api/ranks/:platform/:id", get(get_ranks))
+        .route("/v1/ranks/:platform/:id", get(get_ranks_v1))
+        .route("/api/ranks/:platform/:id", get(get_ranks_public))
         .layer(cors)
         .with_state(state);
 

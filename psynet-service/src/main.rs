@@ -121,92 +121,71 @@ async fn resolve_epic_account_id(
 
     let mut last_diag = String::new();
 
-    // 1. Epic User Search Service (used by Rocket League game clients)
-    if let Ok(mut search_url) = reqwest::Url::parse(&format!(
-        "https://user-search-service-prod.ol.epicgames.com/api/v1/search/{}",
-        state.epic_account_id
-    )) {
-        search_url
-            .query_pairs_mut()
-            .append_pair("prefix", trimmed);
+    // 1. Epic User Search Service (requires ?prefix=...&platform=...)
+    // Checks primary Epic names first, then linked external auth names (PSN/Xbox/Steam)
+    for platform_hint in ["epic", "psn", "xbl", "steam"] {
+        if let Ok(mut search_url) = reqwest::Url::parse(&format!(
+            "https://user-search-service-prod.ol.epicgames.com/api/v1/search/{}",
+            state.epic_account_id
+        )) {
+            search_url
+                .query_pairs_mut()
+                .append_pair("prefix", trimmed)
+                .append_pair("platform", platform_hint);
 
-        if let Ok(res) = state
-            .http_client
-            .get(search_url)
-            .bearer_auth(token)
-            .send()
-            .await
-        {
-            let status = res.status();
-            let text = res.text().await.unwrap_or_default();
-            if status.is_success() {
-                if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
-                    for entry in &arr {
-                        let exact = entry
-                            .get("matches")
-                            .and_then(|m| m.as_array())
-                            .map(|list| {
-                                list.iter().any(|item| {
-                                    item.get("value")
-                                        .and_then(|v| v.as_str())
-                                        .map(|val| val.eq_ignore_ascii_case(trimmed))
-                                        .unwrap_or(false)
+            if let Ok(res) = state
+                .http_client
+                .get(search_url)
+                .bearer_auth(token)
+                .send()
+                .await
+            {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                if status.is_success() {
+                    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                        for entry in &arr {
+                            let exact = entry
+                                .get("matches")
+                                .and_then(|m| m.as_array())
+                                .map(|list| {
+                                    list.iter().any(|item| {
+                                        item.get("value")
+                                            .and_then(|v| v.as_str())
+                                            .map(|val| val.eq_ignore_ascii_case(trimmed))
+                                            .unwrap_or(false)
+                                    })
                                 })
-                            })
-                            .unwrap_or(false);
+                                .unwrap_or(false);
 
-                        if exact {
-                            if let Some(acc_id) = entry.get("accountId").and_then(|v| v.as_str()) {
+                            if exact {
+                                if let Some(acc_id) =
+                                    entry.get("accountId").and_then(|v| v.as_str())
+                                {
+                                    return Ok(acc_id.to_string());
+                                }
+                            }
+                        }
+                        if platform_hint == "epic" {
+                            if let Some(acc_id) = arr
+                                .first()
+                                .and_then(|e| e.get("accountId"))
+                                .and_then(|v| v.as_str())
+                            {
                                 return Ok(acc_id.to_string());
                             }
                         }
                     }
-                    if let Some(acc_id) = arr
-                        .first()
-                        .and_then(|e| e.get("accountId"))
-                        .and_then(|v| v.as_str())
-                    {
-                        return Ok(acc_id.to_string());
-                    }
+                    last_diag = format!("search[{}](empty)", platform_hint);
+                } else {
+                    let snippet: String = text.chars().take(100).collect();
+                    last_diag = format!("search[{}]({}: {})", platform_hint, status, snippet);
                 }
             }
-            last_diag = format!("search({})", status);
         }
     }
 
-    // 2. Fallback: Account Public Service bulk displayName query
-    if let Ok(mut bulk_url) = reqwest::Url::parse(
-        "https://account-public-service-prod.ol.epicgames.com/account/api/public/account",
-    ) {
-        bulk_url
-            .query_pairs_mut()
-            .append_pair("displayName", trimmed);
-
-        if let Ok(res) = state
-            .http_client
-            .get(bulk_url)
-            .bearer_auth(token)
-            .send()
-            .await
-        {
-            let status = res.status();
-            let text = res.text().await.unwrap_or_default();
-            if status.is_success() {
-                if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
-                    if let Some(acc_id) = arr
-                        .first()
-                        .and_then(|e| e.get("id"))
-                        .and_then(|v| v.as_str())
-                    {
-                        return Ok(acc_id.to_string());
-                    }
-                }
-            }
-            last_diag = format!("{} | bulk({})", last_diag, status);
-        }
-    }
-
-    // 3. Fallback: Account Public Service exact displayName path
+    // 2. Fallback: Account Public Service exact displayName path
     for host in [
         "https://account-public-service-prod.ol.epicgames.com/account/api/public/account/displayName/",
         "https://account-public-service-prod03.ol.epicgames.com/account/api/public/account/displayName/",
@@ -348,7 +327,6 @@ async fn query_psynet_ranks(
     }
 }
 
-// Protected internal route used by ballchasing-service proxy
 async fn get_ranks_v1(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -360,7 +338,6 @@ async fn get_ranks_v1(
     query_psynet_ranks(&state, &platform, &id).await
 }
 
-// Public fallback route used if ballchasing-service is sleeping/redeploying
 async fn get_ranks_public(
     State(state): State<Arc<AppState>>,
     Path((platform, id)): Path<(String, String)>,

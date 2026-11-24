@@ -1,216 +1,352 @@
-const express = require('express');
-const cors = require('cors');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-const mongoose = require('mongoose');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const PORT = process.env.PORT || 3001;
-const MONGODB_URI = process.env.MONGODB_URI;
-if (!MONGODB_URI) { console.error('FATAL ERROR: MONGODB_URI is missing.'); process.exit(1); }
-mongoose.connect(MONGODB_URI).then(() => console.log('Connected to MongoDB')).catch(err => console.error('MongoDB error:', err));
-
-// --- SCHEMAS ---
-const settingsSchema = new mongoose.Schema({
-  _id: { type: String, default: 'global_settings' },
-  bannerText: { type: String, default: '' },
-  bannerExpiry: { type: Date, default: null },
-  seasonEnd: { type: Date, default: null },
-  maintenanceMode: { type: Boolean, default: false },
-  disabledFeatures: { type: [String], default: [] },
-  popupText: { type: String, default: '' },
-  popupExpiry: { type: Date, default: null },
-  popupId: { type: String, default: '' },
-  apiUsageCount: { type: Number, default: 0 }
-});
-const Settings = mongoose.model('Settings', settingsSchema);
-
-const newsSchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  content: { type: String, required: true },
-  date: { type: Date, default: Date.now }
-});
-const News = mongoose.model('News', newsSchema);
-
-const logSchema = new mongoose.Schema({
-  action: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now }
-});
-const Log = mongoose.model('Log', logSchema);
-
-const favoriteSchema = new mongoose.Schema({
-  playerName: { type: String, required: true },
-  platform: { type: String, required: true },
-  count: { type: Number, default: 0 }
-});
-const Favorite = mongoose.model('Favorite', favoriteSchema);
-
-// --- API USAGE TRACKER ---
-let apiCallsSinceLastSync = 0;
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') && !req.path.includes('/admin/')) apiCallsSinceLastSync++;
-  next();
-});
-setInterval(async () => {
-  if (apiCallsSinceLastSync > 0) {
-    try {
-      await Settings.findByIdAndUpdate('global_settings', { $inc: { apiUsageCount: apiCallsSinceLastSync } }, { upsert: true });
-      apiCallsSinceLastSync = 0;
-    } catch (e) {}
-  }
-}, 60000);
-
-const logAction = async (action) => { try { await Log.create({ action }); } catch (e) {} };
-
-// --- AUTH ---
-const verifyToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Access denied' });
-  try {
-    jwt.verify(token, process.env.JWT_SECRET || 'fallback-super-secret-key');
-    next();
-  } catch (error) { res.status(401).json({ error: 'Invalid token' }); }
+use axum::{
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
 };
+use serde::Serialize;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+use tower_http::cors::{Any, CorsLayer};
 
-app.post('/api/auth/login', async (req, res) => {
-  const { password } = req.body;
-  if (!password || password !== process.env.ADMIN_PASSWORD) return res.status(401).json({ error: 'Invalid password' });
-  const token = jwt.sign({ role: 'admin' }, process.env.JWT_SECRET || 'fallback-super-secret-key', { expiresIn: '12h' });
-  res.json({ token });
-});
+use psynet::{PlayerId, PlayerPlatform, PsyNetClient};
 
-// --- BALLCHASING API ---
-const cache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; 
-app.get('/api/player/:platform/:id/replays', async (req, res) => {
-  const { platform, id } = req.params;
-  const playerId = `${platform}:${id}`;
-  const cacheKey = `replays:${playerId}`;
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) return res.json(cached.data);
+struct TokenCache {
+    access_token: String,
+    expires_at: Instant,
+}
 
-  try {
-    const response = await fetch(`https://ballchasing.com/api/replays?player-id=${playerId}&count=20`, {
-      headers: { 'Authorization': process.env.BALLCHASING_API_KEY, 'Accept': 'application/json' }
+struct AppState {
+    internal_api_token: String,
+    psy_client: PsyNetClient,
+    http_client: reqwest::Client,
+    epic_account_id: String,
+    epic_device_id: String,
+    epic_device_secret: String,
+    token_cache: RwLock<TokenCache>,
+}
+
+#[derive(Serialize)]
+struct RankData {
+    playlist: String,
+    mmr: i32,
+    tier: i32,
+    division: String,
+    matches_played: i32,
+    win_rate: i32,
+    win_streak: i32,
+    peak_mmr: i32,
+    peak_tier: i32,
+}
+
+// --- Epic Games Token Exchange ---
+async fn fetch_epic_access_token(
+    client: &reqwest::Client,
+    account_id: &str,
+    device_id: &str,
+    secret: &str,
+) -> Result<String, String> {
+    let client_id = "3f69e56c7649492c8cc29f1af08a8a12";
+    let client_secret = "b51ee9cb12234f50a69efa67ef53812e";
+
+    let params = [
+        ("grant_type", "device_auth"),
+        ("account_id", account_id),
+        ("device_id", device_id),
+        ("secret", secret),
+    ];
+
+    let res = client
+        .post("https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token")
+        .basic_auth(client_id, Some(client_secret))
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("JSON error: {}", e))?;
+        if let Some(token) = json.get("access_token").and_then(|t| t.as_str()) {
+            return Ok(token.to_string());
+        }
+    }
+
+    Err(format!("Failed to get token. Status: {}. Body: {}", status, text))
+}
+
+async fn get_valid_epic_token(state: &AppState, force_refresh: bool) -> Result<String, String> {
+    if !force_refresh {
+        let guard = state.token_cache.read().await;
+        if Instant::now() < guard.expires_at {
+            return Ok(guard.access_token.clone());
+        }
+    }
+
+    let mut guard = state.token_cache.write().await;
+    if !force_refresh && Instant::now() < guard.expires_at {
+        return Ok(guard.access_token.clone());
+    }
+
+    let fresh = fetch_epic_access_token(
+        &state.http_client,
+        &state.epic_account_id,
+        &state.epic_device_id,
+        &state.epic_device_secret,
+    )
+    .await?;
+
+    guard.access_token = fresh.clone();
+    guard.expires_at = Instant::now() + Duration::from_secs(3 * 3600);
+    Ok(fresh)
+}
+
+// --- Resolve Epic Display Name -> 32-char Epic Account ID ---
+async fn resolve_epic_account_id(
+    state: &AppState,
+    token: &str,
+    input: &str,
+) -> Result<String, (StatusCode, String)> {
+    let trimmed = input.trim();
+    if trimmed.len() == 32 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(trimmed.to_lowercase());
+    }
+
+    let mut url = reqwest::Url::parse(
+        "https://account-public-service-prod.ol.epicgames.com/account/api/public/account/displayName/",
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    url.path_segments_mut()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Invalid Epic lookup URL".to_string()))?
+        .push(trimmed);
+
+    let res = state
+        .http_client
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Epic lookup network error: {}", e)))?;
+
+    if res.status() == StatusCode::NOT_FOUND {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Epic display name '{}' not found", trimmed),
+        ));
+    }
+
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Epic lookup failed ({}): {}", status, text),
+        ));
+    }
+
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Invalid Epic JSON: {}", e)))?;
+
+    json.get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("No Epic Account ID returned for '{}'", trimmed),
+            )
+        })
+}
+
+// --- Auth Check ---
+fn check_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
+    if let Some(auth_header) = headers.get("Authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str == format!("Bearer {}", expected_token) {
+                return Ok(());
+            }
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
+}
+
+// --- Health Check Endpoint ---
+async fn health_check() -> impl IntoResponse {
+    (StatusCode::OK, "OK")
+}
+
+// --- Ranks Endpoint ---
+async fn get_ranks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((platform, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(status) = check_auth(&headers, &state.internal_api_token) {
+        return (status, "Unauthorized").into_response();
+    }
+
+    println!("Fetching PsyNet data for: {} / {}", platform, id);
+
+    let player_platform = match platform.to_lowercase().as_str() {
+        "epic" => PlayerPlatform::Epic,
+        "steam" => PlayerPlatform::Steam,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Invalid platform. Supported by PsyNet: epic, steam",
+            )
+                .into_response()
+        }
+    };
+
+    let mut token = match get_valid_epic_token(&state, false).await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+
+    let resolved_id = if matches!(player_platform, PlayerPlatform::Epic) {
+        match resolve_epic_account_id(&state, &token, &id).await {
+            Ok(acc_id) => acc_id,
+            Err((code, msg)) => return (code, msg).into_response(),
+        }
+    } else {
+        id.trim().to_string()
+    };
+
+    let mut rpc_res = state
+        .psy_client
+        .auth_player(&state.epic_account_id, &token)
+        .await;
+
+    if rpc_res.is_err() {
+        if let Ok(refreshed) = get_valid_epic_token(&state, true).await {
+            token = refreshed;
+            rpc_res = state
+                .psy_client
+                .auth_player(&state.epic_account_id, &token)
+                .await;
+        }
+    }
+
+    let rpc = match rpc_res {
+        Ok(rpc) => rpc,
+        Err(e) => {
+            eprintln!("PsyNet Auth Error: {:#}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("PsyNet auth failed: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    let player_id = PlayerId::new(player_platform, &resolved_id);
+
+    match rpc.get_players_skills(vec![player_id]).await {
+        Ok(players_with_skills) => {
+            let mut response_data = Vec::new();
+
+            if let Some(player) = players_with_skills.first() {
+                for skill in &player.skills {
+                    let mmr_rounded = skill.mmr.round() as i32;
+                    response_data.push(RankData {
+                        playlist: skill.playlist.to_string(),
+                        mmr: mmr_rounded,
+                        tier: skill.tier as i32,
+                        division: skill.division.to_string(),
+                        matches_played: skill.matches_played as i32,
+                        win_rate: 0,
+                        win_streak: skill.win_streak as i32,
+                        peak_mmr: mmr_rounded,
+                        peak_tier: skill.tier as i32,
+                    });
+                }
+            }
+
+            (StatusCode::OK, Json(response_data)).into_response()
+        }
+        Err(e) => {
+            println!("PsyNet Error: {:?}", e);
+            (
+                StatusCode::NOT_FOUND,
+                format!("Player '{}' not found on PsyNet", id),
+            )
+                .into_response()
+        }
+    }
+}
+
+// --- Main Function ---
+#[tokio::main]
+async fn main() {
+    dotenvy::dotenv().ok();
+
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let internal_api_token =
+        std::env::var("INTERNAL_API_TOKEN").unwrap_or_else(|_| "default_token".to_string());
+
+    let epic_account_id =
+        std::env::var("EPIC_ACCOUNT_ID").expect("EPIC_ACCOUNT_ID must be set");
+    let epic_device_id = std::env::var("EPIC_DEVICE_ID").expect("EPIC_DEVICE_ID must be set");
+    let epic_device_secret =
+        std::env::var("EPIC_DEVICE_SECRET").expect("EPIC_DEVICE_SECRET must be set");
+
+    let http_client = reqwest::Client::new();
+
+    println!("Exchanging Device Auth for Access Token...");
+    let access_token = match fetch_epic_access_token(
+        &http_client,
+        &epic_account_id,
+        &epic_device_id,
+        &epic_device_secret,
+    )
+    .await
+    {
+        Ok(token) => token,
+        Err(e) => {
+            eprintln!("CRITICAL ERROR: {}", e);
+            std::process::exit(1);
+        }
+    };
+    println!("Successfully obtained Epic Access Token!");
+
+    let psy_client = PsyNetClient::new();
+
+    let state = Arc::new(AppState {
+        internal_api_token,
+        psy_client,
+        http_client,
+        epic_account_id,
+        epic_device_id,
+        epic_device_secret,
+        token_cache: RwLock::new(TokenCache {
+            access_token,
+            expires_at: Instant::now() + Duration::from_secs(3 * 3600),
+        }),
     });
-    if (!response.ok) throw new Error(`Ballchasing API error: ${response.status}`);
-    const data = await response.json();
-    const normalized = (data.list || []).map(r => ({
-      id: r.id, 
-      date: r.date, 
-      playlist: r.playlist_id, 
-      duration: r.duration, 
-      map: r.map_name, 
-      teams: r.teams,
-      season: r.season, // <-- ADDED: Pass the season to frontend
-      players: r.players.map(p => ({
-        name: p.name, platform: p.platform,
-        stats: { score: p.stats?.score ?? 0, goals: p.stats?.goals ?? 0, assists: p.stats?.assists ?? 0, saves: p.stats?.saves ?? 0, shots: p.stats?.shots ?? 0, mvps: p.stats?.mvps ?? 0, possession: p.stats?.possession ?? 0, demos: p.stats?.demo?.inflicted ?? 0, boost_bpm: p.stats?.boost?.bpm ?? 0 }
-      })),
-    }));
-    cache.set(cacheKey, { data: normalized, timestamp: Date.now() });
-    res.json(normalized);
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch replay data' }); }
-});
 
-app.get('/api/leaderboard', async (req, res) => {
-  res.json([
-    { name: 'Mawkzy', mmr: 1950, wins: 150, losses: 50 },
-    { name: 'Zen', mmr: 2100, wins: 200, losses: 40 },
-    { name: 'Rise', mmr: 1800, wins: 120, losses: 60 }
-  ]);
-});
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
-// --- STEAM API ---
-let steamCache = { count: null, timestamp: 0 };
-app.get('/api/steam-count', async (req, res) => {
-  try {
-    if (Date.now() - steamCache.timestamp < 300000) return res.json({ count: steamCache.count });
-    const response = await fetch('https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=252950');
-    const data = await response.json();
-    steamCache = { count: data.response?.player_count || null, timestamp: Date.now() };
-    res.json({ count: steamCache.count });
-  } catch (error) { res.status(500).json({ count: null }); }
-});
+    let app = Router::new()
+        .route("/health", get(health_check))
+        .route("/v1/ranks/:platform/:id", get(get_ranks))
+        .route("/api/ranks/:platform/:id", get(get_ranks))
+        .layer(cors)
+        .with_state(state);
 
-// --- FAVORITES ---
-app.post('/api/favorites/toggle', async (req, res) => {
-  const { name, platform, action } = req.body;
-  try {
-    if (action === 'add') await Favorite.findOneAndUpdate({ playerName: name, platform }, { $inc: { count: 1 } }, { upsert: true });
-    else await Favorite.findOneAndUpdate({ playerName: name, platform }, { $inc: { count: -1 } });
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
+    let addr = SocketAddr::from(([0, 0, 0, 0], port.parse().unwrap()));
+    println!("PsyNet service on :{}", port);
 
-// --- SETTINGS & PUBLIC DATA ---
-app.get('/api/settings', async (req, res) => {
-  try {
-    let settings = await Settings.findById('global_settings');
-    if (!settings) settings = await Settings.create({ _id: 'global_settings' });
-    res.json(settings);
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.get('/api/news', async (req, res) => {
-  try { const news = await News.find().sort({ date: -1 }).limit(3); res.json(news); } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-// --- ADMIN DASHBOARD ROUTES (Protected) ---
-app.post('/api/settings', verifyToken, async (req, res) => {
-  try {
-    const newSettings = await Settings.findByIdAndUpdate('global_settings', req.body, { new: true, upsert: true });
-    await logAction('Updated global settings');
-    res.json({ success: true, settings: newSettings });
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.get('/api/admin/backup', verifyToken, async (req, res) => {
-  try {
-    const settings = await Settings.findById('global_settings');
-    await logAction('Downloaded database backup');
-    res.setHeader('Content-Disposition', 'attachment; filename="rl_settings_backup.json"');
-    res.setHeader('Content-Type', 'application/json');
-    res.send(JSON.stringify(settings, null, 2));
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.get('/api/admin/logs', verifyToken, async (req, res) => {
-  try { const logs = await Log.find().sort({ timestamp: -1 }).limit(20); res.json(logs); } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.get('/api/admin/favorites', verifyToken, async (req, res) => {
-  try { const favs = await Favorite.find().sort({ count: -1 }).limit(10); res.json(favs); } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.post('/api/admin/news', verifyToken, async (req, res) => {
-  try {
-    const post = await News.create(req.body);
-    await logAction(`Created news post: ${req.body.title}`);
-    res.json({ success: true, post });
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.put('/api/admin/news/:id', verifyToken, async (req, res) => {
-  try {
-    const post = await News.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    await logAction(`Edited news post: ${post.title}`);
-    res.json({ success: true, post });
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.delete('/api/admin/news/:id', verifyToken, async (req, res) => {
-  try {
-    await News.findByIdAndDelete(req.params.id);
-    await logAction(`Deleted a news post`);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: 'Failed' }); }
-});
-
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
-app.listen(PORT, '0.0.0.0', () => console.log(`Service running on :${PORT}`));
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}

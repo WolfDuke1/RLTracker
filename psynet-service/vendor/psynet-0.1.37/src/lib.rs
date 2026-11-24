@@ -22,20 +22,34 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 const BASE_URL: &str = "https://api.rlpp.psynet.gg/rpc";
-const GAME_VERSION: &str = "261031.63733.533021";
-const FEATURE_SET: &str = "PrimeUpdate60_1";
-const PSY_BUILD_ID: &str = "-242096153";
-const PSY_SIG_KEY: &str = "c338bd36fb8c42b1a431d30add939fc7";
-const PSY_BUILD_SECRET: &str = "eba094a6fd0abdff913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3";
+const DEFAULT_GAME_VERSION: &str = "261031.63733.533021";
+const DEFAULT_FEATURE_SET: &str = "PrimeUpdate60_1";
+const DEFAULT_PSY_BUILD_ID: &str = "-242096153";
+const DEFAULT_PSY_SIG_KEY: &str = "c338bd36fb8c42b1a431d30add939fc7";
+const DEFAULT_PSY_BUILD_SECRET: &str =
+    "eba094a6fd0abdff913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3";
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = futures_util::stream::SplitSink<WsStream, Message>;
 
+fn env_or_default(key: &str, fallback: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub struct PsyNetClient {
     http: reqwest::Client,
     request_ids: Arc<RequestIdCounter>,
+    game_version: String,
+    feature_set: String,
+    build_id: String,
+    sig_key: String,
+    build_secret: String,
 }
 
 impl PsyNetClient {
@@ -46,6 +60,11 @@ impl PsyNetClient {
                 .build()
                 .expect("valid reqwest client"),
             request_ids: Arc::new(RequestIdCounter::default()),
+            game_version: env_or_default("PSY_GAME_VERSION", DEFAULT_GAME_VERSION),
+            feature_set: env_or_default("PSY_FEATURE_SET", DEFAULT_FEATURE_SET),
+            build_id: env_or_default("PSY_BUILD_ID", DEFAULT_PSY_BUILD_ID),
+            sig_key: env_or_default("PSY_SIG_KEY", DEFAULT_PSY_SIG_KEY),
+            build_secret: env_or_default("PSY_BUILD_SECRET", DEFAULT_PSY_BUILD_SECRET),
         }
     }
 
@@ -58,7 +77,7 @@ impl PsyNetClient {
             language: "INT".to_string(),
             auth_ticket: access_token.to_string(),
             build_region: String::new(),
-            feature_set: FEATURE_SET.to_string(),
+            feature_set: self.feature_set.clone(),
             device: "PC".to_string(),
             local_first_player_id: player_id.to_string(),
             set_as_primary_account: true,
@@ -67,7 +86,7 @@ impl PsyNetClient {
             allow_batching: false,
             headers: vec![AuthHeader {
                 key: "PsyBuildSecret".to_string(),
-                value: PSY_BUILD_SECRET.to_string(),
+                value: self.build_secret.clone(),
             }],
         };
 
@@ -94,14 +113,14 @@ impl PsyNetClient {
         let mut request = url
             .into_client_request()
             .with_context(|| format!("invalid PsyNet websocket URL {url:?}"))?;
-        
+
         request.headers_mut().insert(
             HeaderName::from_static("psybuildid"),
-            HeaderValue::from_static(PSY_BUILD_ID),
+            HeaderValue::from_str(&self.build_id)?,
         );
         request.headers_mut().insert(
             USER_AGENT,
-            HeaderValue::from_str(&format!("RL Win/{GAME_VERSION} gzip"))?,
+            HeaderValue::from_str(&format!("RL Win/{} gzip", self.game_version))?,
         );
         request.headers_mut().insert(
             HeaderName::from_static("psyenvironment"),
@@ -164,6 +183,7 @@ impl PsyNetClient {
             write,
             pending,
             request_ids: Arc::clone(&self.request_ids),
+            sig_key: self.sig_key.clone(),
             local_player_id,
         })
     }
@@ -176,7 +196,7 @@ impl PsyNetClient {
         let url = format!("{BASE_URL}/{}", path.join("/"));
         let body = serde_json::to_vec(params).context("failed to serialize PsyNet request")?;
         let mut headers = HeaderMap::new();
-        
+
         headers.insert(
             CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded"),
@@ -184,12 +204,13 @@ impl PsyNetClient {
         headers.insert(
             USER_AGENT,
             HeaderValue::from_str(&format!(
-                "RL Win/{GAME_VERSION} gzip (x86_64-pc-win32) curl-7.67.0 Schannel"
+                "RL Win/{} gzip (x86_64-pc-win32) curl-7.67.0 Schannel",
+                self.game_version
             ))?,
         );
         headers.insert(
             HeaderName::from_static("psybuildid"),
-            HeaderValue::from_static(PSY_BUILD_ID),
+            HeaderValue::from_str(&self.build_id)?,
         );
         headers.insert(
             HeaderName::from_static("psyenvironment"),
@@ -201,11 +222,11 @@ impl PsyNetClient {
         );
         headers.insert(
             HeaderName::from_static("psysig"),
-            HeaderValue::from_str(&generate_psy_sig(&body))?,
+            HeaderValue::from_str(&generate_psy_sig(&self.sig_key, &body))?,
         );
         headers.insert(
             HeaderName::from_static("psybuildsecret"),
-            HeaderValue::from_static(PSY_BUILD_SECRET),
+            HeaderValue::from_str(&self.build_secret)?,
         );
 
         let response = self
@@ -247,6 +268,7 @@ pub struct PsyNetRpc {
     write: Arc<Mutex<WsWrite>>,
     pending: PendingRequests,
     request_ids: Arc<RequestIdCounter>,
+    sig_key: String,
     local_player_id: PlayerId,
     _closer: Arc<SocketCloser>,
 }
@@ -349,7 +371,7 @@ impl PsyNetRpc {
         let mut headers = HashMap::new();
         headers.insert("PsyService".to_string(), service.to_string());
         headers.insert("PsyRequestID".to_string(), request_id.clone());
-        let message = build_message(&headers, Some(data))?;
+        let message = build_message(&self.sig_key, &headers, Some(data))?;
 
         self.pending.lock().await.insert(request_id.clone(), sender);
         let send_result = self
@@ -726,8 +748,8 @@ struct PsyResponsePayload {
     error: Option<PsyError>,
 }
 
-fn generate_psy_sig(body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(PSY_SIG_KEY.as_bytes())
+fn generate_psy_sig(sig_key: &str, body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(sig_key.as_bytes())
         .expect("HMAC accepts keys of any size");
     mac.update(b"-");
     mac.update(body);
@@ -735,6 +757,7 @@ fn generate_psy_sig(body: &[u8]) -> String {
 }
 
 fn build_message(
+    sig_key: &str,
     headers: &HashMap<String, String>,
     body: Option<&impl Serialize>,
 ) -> Result<String> {
@@ -744,7 +767,7 @@ fn build_message(
     };
     let mut headers = headers.clone();
     if let Some(body) = body.as_deref() {
-        headers.insert("PsySig".to_string(), generate_psy_sig(body));
+        headers.insert("PsySig".to_string(), generate_psy_sig(sig_key, body));
     }
 
     let mut message = String::new();
@@ -833,8 +856,12 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("PsyRequestID".to_string(), "PsyNetMessage_X_1".to_string());
 
-        let message =
-            build_message(&headers, Some(&serde_json::json!({"PlayerID": "Epic|a|0"}))).unwrap();
+        let message = build_message(
+            DEFAULT_PSY_SIG_KEY,
+            &headers,
+            Some(&serde_json::json!({"PlayerID": "Epic|a|0"})),
+        )
+        .unwrap();
 
         assert!(message.contains("PsyRequestID: PsyNetMessage_X_1\r\n"));
         assert!(message.contains("PsySig: "));

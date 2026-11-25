@@ -27,7 +27,7 @@ const DEFAULT_FEATURE_SET: &str = "PrimeUpdate60_1";
 const DEFAULT_PSY_BUILD_ID: &str = "-242096153";
 const DEFAULT_PSY_SIG_KEY: &str = "c338bd36fb8c42b1a431d30add939fc7";
 const DEFAULT_PSY_BUILD_SECRET: &str =
-    "eba094a6fd0abdff913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3";
+    "eba094a6fd9abbdf913dcbadf18ab59682671cdcc7cebc4902b81113273f5fa3";
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
